@@ -15,6 +15,7 @@ export type SnippetExportItem = {
   tags?: string[];
   package?: string;
   targetGroups?: string[];
+  targetsAllHosts?: boolean;
   shortkey?: string;
   noAutoRun?: boolean;
   multiLineRunMode?: Snippet["multiLineRunMode"];
@@ -88,12 +89,20 @@ const mergeSnippetPackagePaths = (...groups: string[][]): string[] => {
   return uniqueStrings(paths);
 };
 
+/**
+ * Concrete host-id bindings (targets) are intentionally omitted for portability;
+ * the portable all-hosts scope rides along and suppresses group scope on import.
+ */
 const toExportItem = (snippet: Snippet): SnippetExportItem => ({
   label: snippet.label,
   command: snippet.command,
   tags: Array.isArray(snippet.tags) ? [...snippet.tags] : [],
   package: snippet.package || "",
-  ...(snippet.targetGroups !== undefined ? { targetGroups: [...snippet.targetGroups] } : {}),
+  ...(snippet.targetsAllHosts
+    ? { targetsAllHosts: true }
+    : snippet.targetGroups !== undefined
+      ? { targetGroups: [...snippet.targetGroups] }
+      : {}),
   ...(snippet.shortkey ? { shortkey: snippet.shortkey } : {}),
   ...(snippet.noAutoRun ? { noAutoRun: snippet.noAutoRun } : {}),
   ...(snippet.multiLineRunMode ? { multiLineRunMode: snippet.multiLineRunMode } : {}),
@@ -134,6 +143,8 @@ const sanitizeImportItem = (value: unknown): SnippetExportItem | null => {
   const label = typeof value.label === "string" && value.label.trim()
     ? value.label.trim()
     : fallbackLabel(value.command);
+  // "Apply to all hosts" is a portable scope; when set it wins over group scope.
+  const targetsAllHosts = value.targetsAllHosts === true;
   return {
     label,
     command: value.command,
@@ -141,11 +152,14 @@ const sanitizeImportItem = (value: unknown): SnippetExportItem | null => {
       ? uniqueStrings(value.tags)
       : [],
     package: typeof value.package === "string" ? value.package.trim() : "",
-    targetGroups: Array.isArray(value.targetGroups)
-      ? normalizeGroupTargetPaths(value.targetGroups.filter(
-          (entry): entry is string => typeof entry === "string",
-        ))
-      : undefined,
+    targetGroups: targetsAllHosts
+      ? undefined
+      : Array.isArray(value.targetGroups)
+        ? normalizeGroupTargetPaths(value.targetGroups.filter(
+            (entry): entry is string => typeof entry === "string",
+          ))
+        : undefined,
+    targetsAllHosts: targetsAllHosts || undefined,
     shortkey: typeof value.shortkey === "string" && value.shortkey.trim()
       ? value.shortkey.trim()
       : undefined,
@@ -244,8 +258,13 @@ const toImportedSnippet = (item: SnippetExportItem, id: string, order?: number):
   command: item.command,
   tags: item.tags || [],
   package: item.package || "",
+  // Host-id bindings are never imported; the all-hosts flag wins over group scope.
   targets: [],
-  ...(item.targetGroups !== undefined ? { targetGroups: [...item.targetGroups] } : {}),
+  ...(item.targetsAllHosts
+    ? { targetsAllHosts: true }
+    : item.targetGroups !== undefined
+      ? { targetGroups: [...item.targetGroups] }
+      : {}),
   ...(item.shortkey ? { shortkey: item.shortkey } : {}),
   ...(item.noAutoRun ? { noAutoRun: item.noAutoRun } : {}),
   ...(item.multiLineRunMode ? { multiLineRunMode: item.multiLineRunMode } : {}),
