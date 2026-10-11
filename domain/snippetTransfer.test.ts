@@ -294,6 +294,10 @@ test("snippet export and import preserve the all-hosts scope", () => {
     snippetPackages: [],
     exportedAt: "2026-10-11T00:00:00.000Z",
   });
+
+  // New exports carry the all-hosts scope, so they must advertise a version
+  // that pre-change releases do not silently accept while dropping the field.
+  assert.equal(exported.version, 3);
   const parsed = parseSnippetImportPayload(JSON.stringify(exported));
   const result = mergeSnippetImportPayload({
     existingSnippets: [],
