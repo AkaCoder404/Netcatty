@@ -2362,6 +2362,39 @@ test("a channel closed without exit-status or exit-signal reports no exit code (
   assert.equal(exits[0].remoteClosedWithoutExitStatus, true);
 });
 
+test("a peer-initiated transport close on a live session reports no exit code (#3631)", async (t) => {
+  const { bridge } = loadBridgeWithMockedSsh2(t, { connectReady: true });
+  const sessions = new Map();
+  const start = registerStartHandler(bridge, sessions);
+  const sender = makeSender();
+  const options = {
+    hostname: "10.0.0.9",
+    username: "netops",
+    port: 22,
+    authMethod: "password",
+    password: "secret",
+    useSshAgent: false,
+    verifyHostKeys: false,
+  };
+
+  await start({ sender }, { ...options, sessionId: "transport-close" });
+  const session = sessions.get("transport-close");
+  assert.ok(session?.conn);
+
+  // Network appliances (Huawei VRP, Ruijie RGOS) and strict bastions end an
+  // active session by closing the whole transport cleanly: no transport
+  // error and no exit-status ever reach the client. ssh2 fires conn "close"
+  // before the owner's stream "close", so this path owns the exit report.
+  session.conn.emit("close");
+  await waitForExitDeliveries();
+
+  const exits = getExitPayloads(sender);
+  assert.equal(exits.length, 1);
+  assert.equal(exits[0].reason, "closed");
+  assert.equal(exits[0].exitCode, undefined, "the sentinel 0 must not be reported as a real exit code");
+  assert.equal(exits[0].remoteClosedWithoutExitStatus, true, "the drop must read as remote-closed, not a clean exit");
+});
+
 test("a real exit-status still reports its numeric exit code", async (t) => {
   const { bridge } = loadBridgeWithMockedSsh2(t, { connectReady: true });
   const sessions = new Map();

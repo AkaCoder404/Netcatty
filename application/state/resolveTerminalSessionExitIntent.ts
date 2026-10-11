@@ -16,6 +16,15 @@ export function formatSessionClosedExitMessage(evt: TerminalSessionExitEvent): s
   if (evt?.remoteClosedWithoutExitStatus) {
     return "\r\n[session closed by remote (no exit status)]";
   }
+  // reason "error" is an abnormal teardown on our side (transport failure,
+  // terminal worker exit) (#3631): the error text is surfaced separately as
+  // the session error, and any exit code carried along belongs to that
+  // infrastructure failure — printing it would read like a clean remote exit
+  // ("session closed (code 0)"), exactly the misreport #3591 removed for
+  // peer-initiated channel closes.
+  if (evt?.reason === "error") {
+    return "\r\n[session closed unexpectedly]";
+  }
   return `\r\n[session closed${evt?.exitCode !== undefined ? ` (code ${evt.exitCode})` : ""}]`;
 }
 

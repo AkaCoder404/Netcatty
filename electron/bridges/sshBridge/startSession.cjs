@@ -2639,10 +2639,18 @@ function createStartSessionApi(ctx) {
                   _terminalSessionGeneration: session?._terminalSessionGeneration,
                 });
               } else {
+                // The peer closed the transport without an SSH error. Network
+                // appliances (Huawei VRP, Ruijie RGOS, bastion gateways) do
+                // this when they drop a session, and no exit-status ever
+                // reaches the client — reporting a sentinel `exitCode: 0`
+                // rendered the drop as a clean user-typed `exit`
+                // ("session closed (code 0)", #3631). Report only what the
+                // remote actually sent, matching the channel-close contract
+                // introduced by #3591.
                 safeSendSessionExit({ safeSend, electronModule, sessions }, contents, sessionId, {
                   sessionId,
-                  exitCode: 0,
                   reason: "closed",
+                  remoteClosedWithoutExitStatus: true,
                   _terminalSessionGeneration: session?._terminalSessionGeneration,
                 });
               }
