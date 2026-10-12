@@ -220,7 +220,15 @@ async function copyFileExclusiveWithFallback(source, target, mode = null, option
         await fs.promises.rename(target, stalePath);
         moved = true;
       } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
+        if (error?.code !== "ENOENT") {
+          // Without the relabel we cannot verify ownership for cleanup. The
+          // pathname may now belong to another writer; retain and disclose it
+          // instead of letting the caller unlink it after this failure.
+          throw Object.assign(error, {
+            targetOwnershipRelinquished: true,
+            retainedTarget: target,
+          });
+        }
       }
       if (moved) {
         let staleIdentity = null;

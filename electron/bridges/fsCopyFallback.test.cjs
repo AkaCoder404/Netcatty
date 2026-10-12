@@ -1065,6 +1065,52 @@ test("promoteLocalTransfer preserves a ready pathname whose ownership the fallba
   );
 });
 
+for (const replaceReady of [false, true]) {
+  test(`promotion preserves the ready file after refused accelerated-copy relabel (replacement=${replaceReady})`, async (t) => {
+    const dir = makeTempDir("promote-refused-copy-relabel-");
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const staged = path.join(dir, "staged");
+    const target = path.join(dir, "target");
+    fs.writeFileSync(staged, "our copy bytes");
+    fs.chmodSync(staged, 0o644);
+    fs.writeFileSync(target, "original");
+    t.after(makeHandleStub("chmod", Object.assign(new Error("metadata unsupported"), { code: "ENOTSUP" })));
+    const renameOriginal = fs.promises.rename;
+    const refusal = Object.assign(new Error("relabel refused"), { code: "EPERM" });
+    let readyPath;
+    t.after(stubPromises("rename", async (...args) => {
+      if (args[0] === staged) {
+        throw Object.assign(new Error("cross-device rename"), { code: "EXDEV" });
+      }
+      if (String(args[1]).includes(".stale-")) {
+        readyPath = args[0];
+        if (replaceReady) {
+          fs.renameSync(readyPath, path.join(dir, "displaced-copy"));
+          fs.writeFileSync(readyPath, "concurrent writer bytes");
+        }
+        throw refusal;
+      }
+      return renameOriginal.apply(fs.promises, args);
+    }));
+    let failure;
+    try {
+      await transferBridge._promoteLocalTransferForTests(staged, target, { existingMode: 0o600 });
+    } catch (error) {
+      failure = error;
+    }
+    assert.ok(readyPath, "the accelerated copy reached the refused relabel");
+    assert.ok(fs.existsSync(readyPath), "failed cleanup must not unlink an unverified pathname");
+    assert.equal(fs.readFileSync(readyPath, "utf8"), replaceReady ? "concurrent writer bytes" : "our copy bytes");
+    assert.equal(fs.readFileSync(staged, "utf8"), "our copy bytes");
+    assert.equal(fs.readFileSync(target, "utf8"), "original");
+    assert.equal(failure?.recoveryFailed, true);
+    assert.equal(failure.cause, refusal, "the original relabel failure is preserved");
+    assert.equal(failure.cause.targetOwnershipRelinquished, true);
+    assert.equal(failure.cause.retainedTarget, readyPath);
+    assert.ok(failure.message.includes(readyPath), "the retained name is disclosed for recovery");
+  });
+}
+
 test("promoteLocalTransfer discloses the retained ready partial when the fallback cannot relabel it", async (t) => {
   const dir = makeTempDir("promote-unrelabelled-ready-");
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
