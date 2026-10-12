@@ -21,6 +21,9 @@ for (const editing of [false, true]) {
       const draft = { ...opened, tags: ["edited"], notes: undefined };
       let saved: Host[] = [];
       let connected: Host | undefined;
+      // Mirror useVaultState.updateHosts: hostsRef holds the freshest host
+      // array and accepts an array or functional updater argument.
+      const hostsRef: { current: Host[] } = { current: editing ? [latest] : [] };
       const save = new Function(
         "hosts", "editingLocalShellHost", "onUpdateHosts", "onConnect",
         "setIsLocalShellHostPanelOpen", "setEditingLocalShellHost",
@@ -28,7 +31,12 @@ for (const editing of [false, true]) {
         `${compiled} return save;`,
       )(
         editing ? [latest] : [], editing ? opened : null,
-        (hosts: Host[]) => { saved = hosts; }, (host: Host) => { connected = host; },
+        (data: Host[] | ((prev: Host[]) => Host[])) => {
+          const next = typeof data === "function" ? data(hostsRef.current) : data;
+          if (next) hostsRef.current = next;
+          saved = next ?? hostsRef.current;
+        },
+        (host: Host) => { connected = host; },
         () => {}, () => {}, upsertHostById, saveWorkSurfaceHostDraft,
       );
       save(draft, connectNow);
@@ -38,6 +46,40 @@ for (const editing of [false, true]) {
     });
   }
 }
+
+// Saving must apply the draft against the freshest host array, not the array
+// captured at render time — a concurrent vault write between render and Save
+// would otherwise be replaced wholesale by the stale snapshot.
+test("local shell save: updater merges against the latest host array", () => {
+  const opened = createLocalShellHost({ id: "local-1", label: "old", tags: ["old"] });
+  const draft = { ...opened, tags: ["edited"] };
+  // A concurrent write lands after the render that captured `hosts`.
+  const concurrent = createLocalShellHost({ id: "local-2", label: "later" });
+  const renderedHosts = [opened];
+  const actualHosts = [...renderedHosts, concurrent];
+  // Mirror useVaultState.updateHosts: hostsRef holds the freshest host array
+  // (including the concurrent write) and accepts an array or updater argument.
+  let saved: Host[] = [];
+  const hostsRef: { current: Host[] } = { current: actualHosts };
+  const save = new Function(
+    "hosts", "editingLocalShellHost", "onUpdateHosts", "onConnect",
+    "setIsLocalShellHostPanelOpen", "setEditingLocalShellHost",
+    "upsertHostById", "saveWorkSurfaceHostDraft",
+    `${compiled} return save;`,
+  )(
+    renderedHosts, opened,
+    (data: Host[] | ((prev: Host[]) => Host[])) => {
+      const next = typeof data === "function" ? data(hostsRef.current) : data;
+      if (next) hostsRef.current = next;
+      saved = next ?? hostsRef.current;
+    },
+    () => {}, () => {}, () => {}, upsertHostById, saveWorkSurfaceHostDraft,
+  );
+  save(draft, false);
+  assert.equal(saved.length, 2, "concurrently added host must survive the save");
+  assert.ok(saved.some((host) => host.id === "local-2"));
+  assert.ok(saved.some((host) => host.id === "local-1" && host.tags.includes("edited")));
+});
 
 // Duplicating a local-shell host opens its copy under a newly generated ID
 // that is not in the vault yet; it must be saved as a new entry, not as an
@@ -54,7 +96,11 @@ test("local shell save: duplicated host with a new id saves as a new entry", () 
     `${compiled} return save;`,
   )(
     [], opened,
-    (hosts: Host[]) => { saved = hosts; }, (host: Host) => { connected = host; },
+    // Mirror useVaultState.updateHosts: accepts an array or a functional
+    // updater applied against the freshest host array (here, the vault is
+    // empty at render time and stays empty in prev too).
+    (data: Host[] | ((prev: Host[]) => Host[])) => { saved = typeof data === "function" ? data(saved) : data; },
+    (host: Host) => { connected = host; },
     () => {}, () => {}, upsertHostById, saveWorkSurfaceHostDraft,
   );
   save(draft, false);

@@ -73,7 +73,7 @@ import {
   upsertHostById,
 } from "../domain/host";
 import { exportHostsToCsvWithStats } from "../domain/vaultImport";
-import { saveWorkSurfaceHostDraft } from "../application/state/useWorkSurfaceHostEditor";
+import { saveWorkSurfaceHostDraft, type WorkSurfaceHostEditorTarget } from "../application/state/useWorkSurfaceHostEditor";
 import { upsertKnownHost } from "../domain/knownHosts";
 import {
   remapSnippetTargetGroupPaths,
@@ -239,7 +239,9 @@ interface VaultViewProps {
   onDeleteHost: (id: string) => void;
   onConnect: (host: Host) => void;
   onOpenHostFromNote?: (host: Host, source?: { noteId: string }) => void;
-  onUpdateHosts: (hosts: Host[]) => VaultHostPersistenceResult | Promise<VaultHostPersistenceResult>;
+  onUpdateHosts: (
+    hosts: Host[] | ((prev: Host[]) => Host[]),
+  ) => VaultHostPersistenceResult | Promise<VaultHostPersistenceResult>;
   onReadPersistedHosts: () => Promise<Host[]>;
   onUpdateKeys: (keys: SSHKey[]) => void;
   onImportOrReuseKey: (draft: Partial<SSHKey>) => SSHKey;
@@ -697,14 +699,25 @@ const VaultViewInner: React.FC<VaultViewProps> = ({
   const handleSaveLocalShellHost = useCallback((host: Host, connectNow?: boolean) => {
     // A duplicated local host carries a freshly generated ID that is not in the
     // vault yet, so it must be saved as a new entry (edit mode would no-op).
+    // (Note: the mode is derived from the rendered hosts snapshot only, so the
+    // updater below can still merge against the up-to-date vault array.)
     const editingExistingHost = hosts.some((entry) => entry.id === editingLocalShellHost?.id);
-    const updatedHosts = saveWorkSurfaceHostDraft(hosts, editingExistingHost && editingLocalShellHost
+    const target: WorkSurfaceHostEditorTarget = editingExistingHost && editingLocalShellHost
       ? { mode: "edit", openedHost: editingLocalShellHost, requestId: 0 }
-      : { mode: "new", defaultGroup: null, requestId: 0 }, host);
-    if (updatedHosts) onUpdateHosts(updatedHosts);
+      : { mode: "new", defaultGroup: null, requestId: 0 };
+    // Apply the draft against the freshest host array, not the one captured at
+    // render time: another vault write (terminal metadata, sync) may have
+    // updated hostsRef between render and Save, and submitting the captured
+    // array would replace it wholesale.
+    let savedHost: Host | null = null;
+    onUpdateHosts((prevHosts) => {
+      const updatedHosts = saveWorkSurfaceHostDraft(prevHosts, target, host);
+      if (!updatedHosts) return prevHosts;
+      savedHost = updatedHosts.find((entry) => entry.id === host.id) ?? null;
+      return updatedHosts;
+    });
     setIsLocalShellHostPanelOpen(false);
     setEditingLocalShellHost(null);
-    const savedHost = updatedHosts?.find((entry) => entry.id === host.id);
     if (connectNow && savedHost) onConnect(savedHost);
   }, [hosts, editingLocalShellHost, onConnect, onUpdateHosts]);
 
