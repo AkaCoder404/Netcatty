@@ -16,7 +16,7 @@ const {
 } = require("./crashLogBridge.cjs").__internals;
 
 // Creates a unique temp directory for one test and registers teardown on the
-// test context so large fixture files never outlive the run.
+// test context so fixture files never outlive the run.
 function tmpFile(t, name = "crash-2026-10-10.log") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "netcatty-crashlog-"));
   t.after(() => {
@@ -48,28 +48,20 @@ test("appendEntryLine stops accepting entries once the per-day file reaches the 
     "oversized entry rejected",
   );
 
-  // Pad the file to exactly the cap, then confirm further writes are dropped.
-  const filler = entryLine();
-  // A padded line costs (filler.length + 10 + padLen) bytes; pad so the file
-  // lands within ~10 bytes of MAX_LOG_FILE_BYTES, leaving no room for the
-  // 50-byte filler entry that follows.
-  const padLen =
-    MAX_LOG_FILE_BYTES -
-    fs.statSync(filePath).size -
-    (filler.length + 20);
-  fs.appendFileSync(filePath, entryLine(padLen) + "\n");
-  const sizeBefore = fs.statSync(filePath).size;
-  assert.ok(
-    sizeBefore <= MAX_LOG_FILE_BYTES && sizeBefore > MAX_LOG_FILE_BYTES - 20,
-    `size ${sizeBefore} should sit just under the cap`,
-  );
-
-  assert.equal(appendEntryLine(filePath, filler), false, "write that would exceed cap is dropped");
-  assert.equal(fs.statSync(filePath).size, sizeBefore, "file did not grow");
+  // Model the boundary with a small real file, without allocating a full log.
+  const filler = JSON.stringify({ message: "\u4e2d" });
+  const lineBytes = Buffer.byteLength(filler, "utf-8");
+  const before = fs.readFileSync(filePath, "utf-8");
+  const stat = t.mock.method(fs, "statSync", () => ({ size: MAX_LOG_FILE_BYTES - lineBytes }));
+  assert.equal(appendEntryLine(filePath, filler), false, "newline would exceed cap by one byte");
+  assert.equal(fs.readFileSync(filePath, "utf-8"), before);
+  stat.mock.mockImplementation(() => ({ size: MAX_LOG_FILE_BYTES - lineBytes - 1 }));
+  assert.equal(appendEntryLine(filePath, filler), true, "entry plus newline fits exactly");
+  assert.equal(fs.readFileSync(filePath, "utf-8"), before + filler + "\n");
 });
 
 test("serializeEntry keeps serialized lines bounded even for huge extras", () => {
-  const huge = { blob: "z".repeat(40 * 1024 * 1024) };
+  const huge = { blob: "z".repeat(MAX_LOG_ENTRY_BYTES + 1) };
   const line = serializeEntry({
     timestamp: "2026-10-10T00:00:00.000Z",
     source: "test",
@@ -94,25 +86,23 @@ test("boundedText truncates long strings and leaves short ones alone", () => {
 test("truncateFileToTail trims oversized files to their last lines", (t) => {
   const { filePath } = tmpFile(t);
 
-  // Simulate a pathological file like issue #3626's 149.7 GB log by writing
-  // a ~17 MB file of valid JSONL lines (each ~16 KB), then trimming.
-  const line = entryLine(16 * 1024);
-  let content = "";
-  while (content.length < MAX_LOG_FILE_BYTES + 1024 * 1024) content += line + "\n";
-  fs.appendFileSync(filePath, content);
-  assert.ok(fs.statSync(filePath).size > MAX_LOG_FILE_BYTES);
+  const maxBytes = 1024;
+  const line = entryLine(128);
+  const content = (line + "\n").repeat(8);
+  fs.writeFileSync(filePath, content);
+  assert.ok(fs.statSync(filePath).size > maxBytes);
 
-  assert.equal(truncateFileToTail(filePath, MAX_LOG_FILE_BYTES), true);
+  assert.equal(truncateFileToTail(filePath, maxBytes), true);
   const newSize = fs.statSync(filePath).size;
-  assert.ok(newSize <= MAX_LOG_FILE_BYTES, `trimmed size ${newSize} exceeds cap`);
-
+  assert.ok(newSize <= maxBytes, `trimmed size ${newSize} exceeds cap`);
+  assert.equal(appendEntryLine(filePath, entryLine()), true, "trimmed log remains appendable");
   // Every remaining line must be a complete, parseable JSONL entry.
   const remaining = fs.readFileSync(filePath, "utf-8").split("\n").filter(Boolean);
   assert.ok(remaining.length > 0);
   for (const l of remaining) assert.doesNotThrow(() => JSON.parse(l));
 
   // Files under the cap are left untouched.
-  assert.equal(truncateFileToTail(filePath, MAX_LOG_FILE_BYTES), false);
+  assert.equal(truncateFileToTail(filePath, maxBytes), false);
 });
 
 test("truncateFileToTail tolerates a tail with no newline and missing files", (t) => {
@@ -121,10 +111,10 @@ test("truncateFileToTail tolerates a tail with no newline and missing files", (t
   // Missing file
   assert.equal(truncateFileToTail(path.join(dir, "crash-2026-01-01.log"), MAX_LOG_FILE_BYTES), false);
 
-  // Oversized tail with a single unterminated giant line: keeps at most maxBytes.
-  fs.appendFileSync(filePath, "g".repeat(MAX_LOG_FILE_BYTES + 4096));
-  assert.equal(truncateFileToTail(filePath, MAX_LOG_FILE_BYTES), true);
-  assert.ok(fs.statSync(filePath).size <= MAX_LOG_FILE_BYTES);
+  // Discard an oversized unterminated line so later entries can be appended.
+  fs.appendFileSync(filePath, "g".repeat(8192));
+  assert.equal(truncateFileToTail(filePath, 4096), true);
+  assert.equal(fs.statSync(filePath).size, 0);
 
   // Oversized tail whose final write was interrupted before its trailing
   // newline: three terminated entries followed by one entry whose trailing
@@ -143,4 +133,30 @@ test("truncateFileToTail tolerates a tail with no newline and missing files", (t
   for (const l of trimmed.split("\n").filter(Boolean)) {
     assert.doesNotThrow(() => JSON.parse(l));
   }
+});
+
+test("truncateFileToTail leaves symlink targets and non-regular files untouched", (t) => {
+  const { dir, filePath } = tmpFile(t);
+  const target = path.join(dir, "unrelated.txt");
+  const content = (entryLine() + "\n").repeat(4);
+  fs.writeFileSync(target, content);
+  fs.symlinkSync(target, filePath);
+  assert.equal(truncateFileToTail(filePath, 128), false);
+  assert.equal(fs.readFileSync(target, "utf-8"), content);
+  assert.ok(fs.lstatSync(filePath).isSymbolicLink());
+  assert.equal(truncateFileToTail(dir, 1), false);
+});
+
+test("truncateFileToTail verifies the opened file before modifying it", (t) => {
+  const { dir, filePath } = tmpFile(t);
+  const replacement = path.join(dir, "replacement.log");
+  const content = (entryLine() + "\n").repeat(4);
+  fs.writeFileSync(filePath, content);
+  fs.writeFileSync(replacement, content);
+  const openSync = fs.openSync;
+  const open = t.mock.method(fs, "openSync", (_filePath, flags) => openSync(replacement, flags));
+  assert.equal(truncateFileToTail(filePath, 128), false);
+  open.mock.restore();
+  assert.equal(fs.readFileSync(filePath, "utf-8"), content);
+  assert.equal(fs.readFileSync(replacement, "utf-8"), content);
 });

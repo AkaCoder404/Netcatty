@@ -152,7 +152,7 @@ function appendEntryLine(filePath, line) {
   } catch {
     size = 0; // file does not exist yet
   }
-  if (size + lineBytes > MAX_LOG_FILE_BYTES) return false;
+  if (size + lineBytes + 1 > MAX_LOG_FILE_BYTES) return false;
 
   try {
     fs.appendFileSync(filePath, line + "\n", "utf-8");
@@ -264,17 +264,24 @@ function pruneOldLogs() {
 function truncateFileToTail(filePath, maxBytes) {
   let stat;
   try {
-    stat = fs.statSync(filePath);
+    stat = fs.lstatSync(filePath);
   } catch {
     return false;
   }
-  if (stat.size <= maxBytes) return false;
+  if (!stat.isFile() || stat.size <= maxBytes) return false;
 
   let fd;
   try {
-    fd = fs.openSync(filePath, "r+");
+    fd = fs.openSync(filePath, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW || 0));
+    // Validate the opened object before reading or truncating it. O_NOFOLLOW
+    // is not available on every platform, and the path may have changed.
+    const openedStat = fs.fstatSync(fd);
+    if (!openedStat.isFile() || openedStat.dev !== stat.dev || openedStat.ino !== stat.ino) {
+      return false;
+    }
+    if (openedStat.size <= maxBytes) return false;
     const buf = Buffer.alloc(maxBytes);
-    const read = fs.readSync(fd, buf, 0, buf.length, stat.size - buf.length);
+    const read = fs.readSync(fd, buf, 0, buf.length, openedStat.size - buf.length);
     const tail = buf.subarray(0, read);
     // Drop the first (possibly partial) line of the tail so every remaining
     // line is a complete JSONL entry.  Also trim anything after the last
