@@ -1020,7 +1020,7 @@ export const esVaultMessages: Messages = {
   'localShell.field.shellEmpty': 'No se encontraron shells',
   'localShell.field.shellResolved': 'Ejecuta {command}',
   'localShell.field.startDir': 'Directorio de inicio',
-  'localShell.field.startDirPlaceholder': 'Por defecto, tu directorio personal',
+  'localShell.field.startDirPlaceholder': 'Heredar directorio inicial global (personal si no se configura)',
   'localShell.saveAndConnect': 'Guardar y conectar',
 
   'hostDetails.plugin.title': 'Conexión de plugin',

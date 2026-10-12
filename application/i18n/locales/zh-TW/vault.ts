@@ -402,7 +402,7 @@ export const zhTWVaultMessages: Messages = {
   'localShell.field.shellEmpty': '未找到可用的 Shell',
   'localShell.field.shellResolved': '啟動 {command}',
   'localShell.field.startDir': '啟動目錄',
-  'localShell.field.startDirPlaceholder': '預設為主目錄',
+  'localShell.field.startDirPlaceholder': '繼承全域起始目錄（未設定時為主目錄）',
   'localShell.saveAndConnect': '儲存並開啟',
 
   'hostDetails.plugin.title': '外掛程式連線',

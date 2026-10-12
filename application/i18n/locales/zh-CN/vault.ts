@@ -402,7 +402,7 @@ export const zhCNVaultMessages: Messages = {
   'localShell.field.shellEmpty': '未发现可用 Shell',
   'localShell.field.shellResolved': '启动 {command}',
   'localShell.field.startDir': '启动目录',
-  'localShell.field.startDirPlaceholder': '默认为主目录',
+  'localShell.field.startDirPlaceholder': '继承全局起始目录（未设置时为主目录）',
   'localShell.saveAndConnect': '保存并打开',
 
   'hostDetails.plugin.title': '插件连接',

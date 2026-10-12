@@ -1064,7 +1064,7 @@ export const ruVaultMessages: Messages = {
   'localShell.field.shellEmpty': 'Оболочки не найдены',
   'localShell.field.shellResolved': 'Запускает {command}',
   'localShell.field.startDir': 'Начальный каталог',
-  'localShell.field.startDirPlaceholder': 'По умолчанию — домашний каталог',
+  'localShell.field.startDirPlaceholder': 'Использовать общий начальный каталог (иначе домашний)',
   'localShell.saveAndConnect': 'Сохранить и открыть',
 
   'hostDetails.plugin.title': 'Подключение плагина',

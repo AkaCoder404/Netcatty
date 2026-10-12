@@ -1030,7 +1030,7 @@ export const enVaultMessages: Messages = {
   'localShell.field.shellEmpty': 'No shells found',
   'localShell.field.shellResolved': 'Runs {command}',
   'localShell.field.startDir': 'Start directory',
-  'localShell.field.startDirPlaceholder': 'Defaults to your home directory',
+  'localShell.field.startDirPlaceholder': 'Inherit global start directory (home if unset)',
   'localShell.saveAndConnect': 'Save & Connect',
 
   'hostDetails.plugin.title': 'Plugin connection',
