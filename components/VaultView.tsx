@@ -73,6 +73,7 @@ import {
   upsertHostById,
 } from "../domain/host";
 import { exportHostsToCsvWithStats } from "../domain/vaultImport";
+import { saveWorkSurfaceHostDraft } from "../application/state/useWorkSurfaceHostEditor";
 import { upsertKnownHost } from "../domain/knownHosts";
 import {
   remapSnippetTargetGroupPaths,
@@ -694,11 +695,15 @@ const VaultViewInner: React.FC<VaultViewProps> = ({
   }, []);
 
   const handleSaveLocalShellHost = useCallback((host: Host, connectNow?: boolean) => {
-    onUpdateHosts(upsertHostById(hosts, host));
+    const updatedHosts = saveWorkSurfaceHostDraft(hosts, editingLocalShellHost
+      ? { mode: "edit", openedHost: editingLocalShellHost, requestId: 0 }
+      : { mode: "new", defaultGroup: null, requestId: 0 }, host);
+    if (updatedHosts) onUpdateHosts(updatedHosts);
     setIsLocalShellHostPanelOpen(false);
     setEditingLocalShellHost(null);
-    if (connectNow) onConnect(host);
-  }, [hosts, onConnect, onUpdateHosts]);
+    const savedHost = updatedHosts?.find((entry) => entry.id === host.id);
+    if (connectNow && savedHost) onConnect(savedHost);
+  }, [hosts, editingLocalShellHost, onConnect, onUpdateHosts]);
 
   const handleEditHost = useCallback((host: Host) => {
     setIsGroupPanelOpen(false);
