@@ -32,6 +32,21 @@ export const LOCAL_TERMINAL_HOST_ID = "local-terminal";
  */
 const EMPTY_LOCAL_SHELL_ARGS: string[] = [];
 
+/**
+ * Platform string describing the machine that is launching the session.
+ *
+ * Vault local hosts can be synced/imported from another OS, so their saved
+ * `host.os` describes the source machine. When the host has no explicit
+ * shell (`localShell` empty), `startLocalSession` spawns the current
+ * machine's OS default shell, so classification must fall back to the
+ * runtime platform — not the persisted host OS — or a Windows host opened
+ * on Linux would be tagged "powershell" while Bash actually runs.
+ */
+const runtimePlatformLike = (): string | undefined => {
+  if (typeof navigator === "undefined") return undefined;
+  return navigator.userAgent || navigator.platform || undefined;
+};
+
 export const createLocalTerminalSession = (
   sessionId: string,
   options?: LocalTerminalOptions,
@@ -132,7 +147,13 @@ export const createHostTerminalSession = (
     // shellType matches ordinary local-terminal creation so captured-CWD
     // restore can reject POSIX injection into CMD/PowerShell sessions.
     ...(host.protocol === "local" ? {
-      shellType: classifyLocalShellType(host.localShell, host.os),
+      // With an explicit shell the basename classifies it on any OS, so the
+      // saved host.os stays the fallback; a default-shell host launches the
+      // current machine's OS default, so classify against the runtime.
+      shellType: classifyLocalShellType(
+        host.localShell,
+        host.localShell?.trim() ? host.os : runtimePlatformLike(),
+      ),
       localShell: host.localShell,
       // Preserve field presence: an edited host must not contribute its args
       // to a session that was launched with an explicit shell and no args.

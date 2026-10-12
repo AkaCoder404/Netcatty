@@ -88,10 +88,14 @@ test("createHostTerminalSession classifies the shell for CMD/PowerShell local va
   );
   assert.equal(customPowershellPath.shellType, "powershell");
 
-  // Default-shell hosts classify by the saved host OS, like ordinary
-  // local-terminal creation classifies by the resolved shell.
-  const windowsDefault = createHostTerminalSession("session-win-default", localVaultHost({ os: "windows" }));
-  assert.equal(windowsDefault.shellType, "powershell");
+  // Default-shell hosts (empty localShell) launch the machine's OS default
+  // shell (the backend's own detection), so classification must use the
+  // runtime platform — not the saved host.os, which may describe a machine
+  // the host was synced/imported from. Node 22's navigator.userAgent is
+  // always "Node.js/<version>", so this test environment always classifies
+  // as POSIX regardless of the CI runner's real OS.
+  const windowsSyncedDefault = createHostTerminalSession("session-win-default", localVaultHost({ os: "windows" }));
+  assert.equal(windowsSyncedDefault.shellType, "posix");
 
   const posixDefault = createHostTerminalSession("session-posix-default", localVaultHost({ os: "linux" }));
   assert.equal(posixDefault.shellType, "posix");

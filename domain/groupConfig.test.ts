@@ -59,6 +59,12 @@ test("applyGroupDefaults lets host device type override group device type", () =
   assert.equal(result.deviceType, "general");
 });
 
+test("applyGroupDefaults skips remote-only device type for local shell hosts", () => {
+  const result = applyGroupDefaults(host({ protocol: "local" }), { deviceType: "network" });
+
+  assert.equal(result.deviceType, undefined);
+});
+
 test("applyGroupDefaults inherits startup command run mode", () => {
   const result = applyGroupDefaults(host(), { startupCommandRunMode: "paste" });
 
