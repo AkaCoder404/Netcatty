@@ -638,3 +638,13 @@ test("applyGroupDefaults still inherits non-credential defaults into serial host
   assert.equal(result.username, undefined);
   assert.equal(result.charset, "UTF-8");
 });
+
+test("applyGroupDefaults does not inherit the group startup command into local shell hosts", () => {
+  const result = applyGroupDefaults(
+    host({ protocol: "local" }),
+    { startupCommand: "rm -rf /", startupCommandRunMode: "paste" },
+  );
+
+  assert.equal(result.startupCommand, undefined);
+  assert.equal(result.startupCommandRunMode, "paste");
+});
