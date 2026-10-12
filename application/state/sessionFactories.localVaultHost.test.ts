@@ -69,6 +69,19 @@ test("createHostTerminalSession classifies the shell for CMD/PowerShell local va
   const cygwin = createHostTerminalSession("session-cygwin", localVaultHost({ localShell: "cygwin", os: "windows" }));
   assert.equal(cygwin.shellType, "posix");
 
+  // Unix discovery emits disambiguated path-slug IDs when multiple
+  // installations share a basename (e.g. /bin/bash vs
+  // /opt/homebrew/bin/bash); the backend launches the resolved command, so
+  // the session must classify as that command's shell type, not "unknown".
+  const slugBash = createHostTerminalSession("session-slug-bash", localVaultHost({ localShell: "bin-bash", os: "macos" }));
+  assert.equal(slugBash.shellType, "posix");
+
+  const slugHomebrewBash = createHostTerminalSession(
+    "session-slug-homebrew",
+    localVaultHost({ localShell: "opt-homebrew-bin-bash", os: "macos" }),
+  );
+  assert.equal(slugHomebrewBash.shellType, "posix");
+
   const customPowershellPath = createHostTerminalSession(
     "session-pwsh-path",
     localVaultHost({ localShell: "C:\\Program Files\\PowerShell\\7\\pwsh.exe", os: "windows" }),

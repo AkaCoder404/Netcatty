@@ -21,6 +21,29 @@ function getExecutableBaseName(filePath: string | undefined) {
   return (parts[parts.length - 1] || "").toLowerCase();
 }
 
+/**
+ * Recover the executable basename from a disambiguated Unix discovery ID.
+ *
+ * `discoverUnixShells()` (shellDiscovery.cjs) uses the bare basename as the
+ * discovered-shell ID only while it is unique; when multiple installations
+ * share a basename (e.g. /bin/bash vs /opt/homebrew/bin/bash) it falls back
+ * to a path slug: the absolute shell path with separators replaced by "-"
+ * ("bin-bash", "opt-homebrew-bin-bash"). Such IDs are stored as the host's
+ * `localShell` value, so they must resolve like the backend does (which maps
+ * the ID to the real command at spawn time) before classification.
+ *
+ * Only slug-shaped values (no separators, contains "-") are considered, and
+ * only when the final slug segment names a recognizable shell, so custom
+ * commands like "custom-shell" still classify as "unknown".
+ */
+function resolveDisambiguatedUnixShellIdBase(shellName: string): string {
+  if (!shellName || /[\\/]/.test(shellName) || !shellName.includes("-")) {
+    return shellName;
+  }
+  const segments = shellName.split("-");
+  return segments[segments.length - 1] || shellName;
+}
+
 export function detectLocalOs(platformLike?: string): LocalOs {
   const platform = String(platformLike || "").toLowerCase();
   if (platform.includes("mac")) return "macos";
@@ -29,11 +52,7 @@ export function detectLocalOs(platformLike?: string): LocalOs {
   return "linux";
 }
 
-export function classifyLocalShellType(
-  shellPath: string | undefined,
-  platformLike?: string,
-): LocalShellType {
-  const shellName = getExecutableBaseName(shellPath);
+function classifyShellBaseName(shellName: string): LocalShellType | undefined {
   if (POWERSHELL_SHELLS.has(shellName)) return "powershell";
   if (CMD_SHELLS.has(shellName)) return "cmd";
   if (FISH_SHELLS.has(shellName)) return "fish";
@@ -44,6 +63,21 @@ export function classifyLocalShellType(
     DISCOVERED_POSIX_SHELL_IDS.has(shellName)
   ) {
     return "posix";
+  }
+  return undefined;
+}
+
+export function classifyLocalShellType(
+  shellPath: string | undefined,
+  platformLike?: string,
+): LocalShellType {
+  const shellName = getExecutableBaseName(shellPath);
+  const byBaseName = classifyShellBaseName(shellName);
+  if (byBaseName) return byBaseName;
+  const slugBaseName = resolveDisambiguatedUnixShellIdBase(shellName);
+  if (slugBaseName !== shellName) {
+    const bySlugBaseName = classifyShellBaseName(slugBaseName);
+    if (bySlugBaseName) return bySlugBaseName;
   }
   if (!shellName) {
     return detectLocalOs(platformLike) === "windows" ? "powershell" : "posix";
