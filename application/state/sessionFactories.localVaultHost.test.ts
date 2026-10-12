@@ -56,6 +56,18 @@ test("createHostTerminalSession classifies the shell for CMD/PowerShell local va
   const pwsh = createHostTerminalSession("session-pwsh", localVaultHost({ localShell: "pwsh", os: "windows" }));
   assert.equal(pwsh.shellType, "powershell");
 
+  // Discovered shell IDs persisted by the local-shell editor are not
+  // executable basenames, but they still resolve to POSIX shells at spawn
+  // time — WSL distros, Git Bash, and Cygwin all run a POSIX shell.
+  const wslId = createHostTerminalSession("session-wsl-id", localVaultHost({ localShell: "wsl-ubuntu", os: "windows" }));
+  assert.equal(wslId.shellType, "posix");
+
+  const gitBash = createHostTerminalSession("session-git-bash", localVaultHost({ localShell: "git-bash", os: "windows" }));
+  assert.equal(gitBash.shellType, "posix");
+
+  const cygwin = createHostTerminalSession("session-cygwin", localVaultHost({ localShell: "cygwin", os: "windows" }));
+  assert.equal(cygwin.shellType, "posix");
+
   const customPowershellPath = createHostTerminalSession(
     "session-pwsh-path",
     localVaultHost({ localShell: "C:\\Program Files\\PowerShell\\7\\pwsh.exe", os: "windows" }),
