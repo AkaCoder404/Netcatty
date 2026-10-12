@@ -79,17 +79,20 @@ export const LocalShellHostDetailsPanel: React.FC<LocalShellHostDetailsPanelProp
     [discoveredShells, shell],
   );
 
-  // A custom shell path/command may still carry metadata saved earlier (when
-  // discovery has since changed). Preserve it as long as the shell is untouched.
-  const shellMeta = matchedShell ?? (
+  // While the shell selection is unchanged from the saved host, prefer the
+  // host's stored metadata: an imported/synced host may carry custom startup
+  // arguments for a shell id that also exists in discovery, and saving an
+  // unrelated edit (label, tag, group) must not overwrite them with the
+  // current discovery result. Discovered metadata applies only after the user
+  // changes the selection — or per-field when the host stores none.
+  const shellMeta =
     shell && shell === initialData?.localShell
       ? {
-          args: initialData?.localShellArgs,
-          name: initialData?.localShellName,
-          icon: initialData?.localShellIcon,
+          args: initialData?.localShellArgs ?? matchedShell?.args,
+          name: initialData?.localShellName ?? matchedShell?.name,
+          icon: initialData?.localShellIcon ?? matchedShell?.icon,
         }
-      : undefined
-  );
+      : matchedShell;
 
   const shellOptions: ComboboxOption[] = useMemo(() => {
     const options: ComboboxOption[] = [

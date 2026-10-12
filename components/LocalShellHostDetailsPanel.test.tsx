@@ -73,3 +73,29 @@ test("buildHost preserves the saved OS on edits and detects it only for new entr
     /os:\s*initialData\?\.os \?\? detectLocalOs\(navigator\.userAgent \|\| navigator\.platform\)/,
   );
 });
+
+test("unchanged shell selection keeps stored metadata over discovery", () => {
+  // A host with custom localShellArgs for a shell id that discovery also
+  // matches must keep its stored args/name/icon when an unrelated edit
+  // (label, tag, group) is saved; discovered metadata applies only after
+  // the user changes the shell selection.
+  const unchanged = panelSource.match(
+    /const shellMeta =\s*\n[\s\S]*?shell === initialData\?\.localShell\s*\n\s*\?\s*\{[\s\S]*?\}\s*\n\s*: matchedShell;/,
+  );
+  assert.ok(unchanged, "shellMeta must branch on an unchanged shell selection");
+  // Inside the unchanged branch, stored metadata wins per field and
+  // matchedShell is only a fallback (never the primary source).
+  assert.match(
+    unchanged[0],
+    /args:\s*initialData\?\.localShellArgs \?\? matchedShell\?\.args/,
+  );
+  assert.match(
+    unchanged[0],
+    /name:\s*initialData\?\.localShellName \?\? matchedShell\?\.name/,
+  );
+  assert.match(
+    unchanged[0],
+    /icon:\s*initialData\?\.localShellIcon \?\? matchedShell\?\.icon/,
+  );
+  assert.doesNotMatch(unchanged[0], /matchedShell \?\?/);
+});
