@@ -5,6 +5,11 @@ import {
   collectSessionSearchFields,
   type SessionHistorySearchMessage,
 } from "../../domain/sessionHistorySearch.ts";
+import {
+  PINYIN_CACHE_MAX_CHARS,
+  getPinyinCacheStatsForTests,
+  resetPinyinCacheForTests,
+} from "../../lib/searchMatcher.ts";
 import { createSessionHistorySearch } from "./sessionHistorySearch.ts";
 
 // One instance for the whole file: it keeps the pre-factory semantics of every
@@ -758,4 +763,28 @@ test("filterSessionHistory caps the query and matches on its capped prefix", () 
   assert.deepEqual(filterSessionHistory([session], longQuery), [session]);
   // The uncapped-looking but normal query still matches exactly.
   assert.deepEqual(filterSessionHistory([session], "zzz-impossible-tail"), []);
+});
+
+// Keep the author's long-title rescan protection local to history. Shared
+// search must still match complete fields, including later joined fields.
+test("history pinyin cache preserves long titles across same-order rescans", () => {
+  resetPinyinCacheForTests();
+  const sessions = Array.from({ length: 17 }, (_, index) =>
+    createSession(`rescan-${index}`, `标题${index}${"重启".repeat(10_000)}`, []));
+  for (let pass = 0; pass < 2; pass += 1) {
+    assert.deepEqual(filterSessionHistory(sessions, "unmatched-latin"), []);
+  }
+  const stats = getPinyinCacheStatsForTests();
+  assert.equal(stats.size, sessions.length);
+  assert.ok(stats.chars <= PINYIN_CACHE_MAX_CHARS);
+  resetPinyinCacheForTests();
+});
+
+test("history alone bounds title pinyin while retaining literal title and body matches", () => {
+  const sessions = [
+    createSession("pinyin-head", `服务器${"a".repeat(256)}`, [{ content: "nginx" }]),
+    createSession("pinyin-tail", `${"a".repeat(256)}服务器`, [{ content: "nginx" }]),
+  ];
+  assert.deepEqual(filterSessionHistory(sessions, "fuwuqi nginx"), [sessions[0]]);
+  assert.deepEqual(filterSessionHistory(sessions, "服务器 nginx"), sessions);
 });

@@ -52,6 +52,9 @@ export type SessionHistorySearchTarget = {
 /** Cap per-field text so very large tool result payloads stay cheap to scan. */
 const MAX_SEARCHABLE_FIELD_LENGTH = 20_000;
 
+/** Bound history-only title transliteration without limiting shared search. */
+const MAX_TITLE_PINYIN_LENGTH = 256;
+
 /**
  * Cap the total searchable text collected per session. Pinyin matching joins
  * every collected field into one haystack, so a long retained session with
@@ -392,14 +395,20 @@ export function matchesSessionSearchIndex(
   query: string | PreparedSearchQuery,
   index: SessionSearchIndex,
 ): boolean {
+  const titlePrefix = index.displayTitle.slice(0, MAX_TITLE_PINYIN_LENGTH);
+  // Do not pass a split UTF-16 surrogate pair to the transliterator.
+  const tail = titlePrefix.charCodeAt(titlePrefix.length - 1);
+  const pinyinTitle = tail >= 0xd800 && tail <= 0xdbff
+    ? titlePrefix.slice(0, -1)
+    : titlePrefix;
   // Pinyin transliteration is too expensive to run over every collected
   // message field on each keystroke; the pinyin fallback is restricted to
-  // the (small) displayed-title field, while literal/compact matching stays
+  // bounded title prefix, while literal/compact matching stays
   // global. Restricting pinyin per field still allows tokens within one
   // query to span fields: "chongqi nginx" matches a session titled
   // "重启服务器" whose message contains "nginx" ("chongqi" via title
   // pinyin, "nginx" literally in the message content).
   return matchesPreparedSearchQuery(query, index.prepared, {
-    pinyinFields: [index.displayTitle],
+    pinyinFields: [pinyinTitle],
   });
 }
