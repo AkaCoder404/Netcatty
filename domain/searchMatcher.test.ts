@@ -259,3 +259,31 @@ test("pinyin cache stays hard-bounded by retained characters, not just entries",
   assert.ok(getPinyinCacheStatsForTests().size > 0);
   resetPinyinCacheForTests();
 });
+
+// Regression (Codex P2, PR #3601): without a transliteration window, each
+// ~20_000-character title cached an entry costing well over 100k characters,
+// so only a handful fit the 1,000,000-char budget. A same-order keystroke
+// scan over more titles than that evicts the cached tail before the scan
+// reaches it — the next keystroke gets zero cache hits and re-transliterates
+// every title again (measured at ~55s for 17 maximum-length titles). The
+// `PINYIN_SOURCE_MAX_CHARS` window keeps each entry small, so a full scan's
+// titles all stay cached and identical rescans reuse them instead of
+// thrashing through re-transliteration.
+test("pinyin cache preserves long titles across same-order full rescans", () => {
+  resetPinyinCacheForTests();
+  // Distinct short prefixes so the windowed cache keys differ per title.
+  const titles = Array.from(
+    { length: 17 },
+    (_, index) => `标题${index}${"重启".repeat(10_000)}`,
+  );
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const title of titles) {
+      matchesSearchQuery("unmatched-latin", title);
+    }
+  }
+  const stats = getPinyinCacheStatsForTests();
+  assert.ok(stats.size >= titles.length,
+    `expected every scanned title cached, got ${stats.size}`);
+  assert.ok(stats.chars <= PINYIN_CACHE_MAX_CHARS);
+  resetPinyinCacheForTests();
+});

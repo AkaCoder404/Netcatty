@@ -9,14 +9,33 @@ export const PINYIN_CACHE_MAX_ENTRIES = 16_384;
 /**
  * Hard cap on the total characters the pinyin cache retains (cache key +
  * full + initials transliterations per entry, i.e. several copies of the
- * source text). A per-entry cap alone is not enough: callers transliterate
- * long fields (e.g. up to 20,000-character session titles), so a scan over
- * many distinct large fields could retain tens or hundreds of megabytes
- * within the entry count. Sources whose transliterations alone exceed this
- * budget are not cached at all — they are simply re-transliterated on the
- * next lookup instead of pinning memory.
+ * source text). A per-entry cap alone is not enough: without the
+ * transliteration window below, calls over huge fields would either retain
+ * megabytes or — with entries sized past the budget — not be cached at all
+ * and cost a full transliteration on every lookup. Sources whose
+ * transliterations alone exceed this budget are not cached at all — they are
+ * simply re-transliterated on the next lookup instead of pinning memory.
  */
 export const PINYIN_CACHE_MAX_CHARS = 1_000_000;
+/**
+ * Window for pinyin transliteration: only the first `PINYIN_SOURCE_MAX_CHARS`
+ * (normalized) characters of a source are transliterated and cached. Without
+ * it, callers transliterate long fields (e.g. up to 20,000-character session
+ * titles), so each cached entry costs well over 100k characters (key + full +
+ * initials, several copies of the source): only a handful of such entries fit
+ * the retained-char budget, and a same-order keystroke scan over more of them
+ * evicts the cached tail before the scan reaches it — every keystroke then
+ * gets zero cache hits and re-transliterates every title again (LRU scan
+ * thrashing). Bounding the window makes entries a few thousand characters, so
+ * a full realistic scan fits the budget and is reused across scans, and the
+ * per-lookup transliteration cost itself stays bounded (pinyin cost scales
+ * with source length). Tradeoff: Latin pinyin queries only match CJK text
+ * within the window of each transliterated field; literal/compact matching is
+ * unaffected. The window is truncated before a lone trailing UTF-16 high
+ * surrogate so a window landing mid-astral-pair cannot transliterate a broken
+ * character.
+ */
+export const PINYIN_SOURCE_MAX_CHARS = 256;
 const PINYIN_CACHE = new Map<string, { full: string; initials: string }>();
 let pinyinCacheChars = 0;
 const IPV4_LIKE_REGEX = /^\d{1,3}(?:\.\d{1,3})+$/;
@@ -52,8 +71,22 @@ function pinyinCacheEntryChars(
   return key.length + entry.full.length + entry.initials.length;
 }
 
+function windowPinyinSource(sourceText: string): string {
+  if (sourceText.length <= PINYIN_SOURCE_MAX_CHARS) return sourceText;
+  const windowed = sourceText.slice(0, PINYIN_SOURCE_MAX_CHARS);
+  // Avoid splitting a UTF-16 surrogate pair when the window lands mid-pair
+  // (e.g. an astral-plane character such as an emoji); drop the lone surrogate.
+  const tail = windowed.charCodeAt(windowed.length - 1);
+  return tail >= 0xd800 && tail <= 0xdbff ? windowed.slice(0, -1) : windowed;
+}
+
 function getPinyinVariants(sourceText: string): { full: string; initials: string } {
-  const cacheKey = normalizeText(sourceText);
+  // Transliterate (and cache by) only the bounded window: pinyin cost scales
+  // with source length, and unwindowed huge sources both freeze the renderer
+  // per lookup and evict the cache's reusable tail before a same-order scan
+  // reaches it (see `PINYIN_SOURCE_MAX_CHARS`).
+  const windowedSource = windowPinyinSource(sourceText);
+  const cacheKey = normalizeText(windowedSource);
   const cached = PINYIN_CACHE.get(cacheKey);
   if (cached) {
     PINYIN_CACHE.delete(cacheKey);
@@ -66,12 +99,12 @@ function getPinyinVariants(sourceText: string): { full: string; initials: string
 
   try {
     full = compactText(
-      pinyin(sourceText, {
+      pinyin(windowedSource, {
         toneType: "none",
       }),
     );
     initials = compactText(
-      pinyin(sourceText, {
+      pinyin(windowedSource, {
         pattern: "first",
         toneType: "none",
       }),
