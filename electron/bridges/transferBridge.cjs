@@ -1126,11 +1126,13 @@ async function promoteLocalTransfer(stagedPath, targetPath, options = {}) {
         );
       }
     } catch (openError) {
+      // An open handle belongs to the outer finally, including when stat or
+      // identity validation fails. Only an actual open failure can retry.
+      if (preparedHandle) throw openError;
       // A restrictive seed is unreadable by us. Grant owner read only to
       // acquire the temporary handle and remove the extra bit again right
       // away: publication must not preserve permissions the destination never
       // had, even when the destination mount refuses the removal.
-      preparedHandle = null;
       if (openError?.code !== "EACCES" && openError?.code !== "EPERM") throw openError;
       if (intendedMode === null) throw openError;
       // A pathname chmod cannot be pinned to the copied inode, so verify the

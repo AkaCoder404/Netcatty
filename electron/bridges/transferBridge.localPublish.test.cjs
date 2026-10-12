@@ -461,3 +461,43 @@ test("copy recovery retains original read access after its permissions become re
   assert.equal(fs.readFileSync(target, "utf8"), "original");
   assert.deepEqual(fs.readdirSync(root), ["target"]);
 });
+
+for (const code of [null, "EIO", "EPERM"]) {
+  test(`prepared handle closes after ${code ?? "successful publication"}`, async (t) => {
+    const root = fs.mkdtempSync(`${temp.getTempFilePath("publish-handle")}-`);
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const staged = path.join(root, "staged");
+    const target = path.join(root, "target");
+    fs.writeFileSync(staged, "download");
+    const open = fs.promises.open;
+    const handles = [];
+    let closes = 0;
+    const failure = Object.assign(new Error("injected stat failure"), { code });
+    t.after(async () => {
+      fs.promises.open = open;
+      for (const close of handles) await close().catch(() => {});
+    });
+    fs.promises.open = async (...args) => {
+      const handle = await open.apply(fs.promises, args);
+      if (String(args[0]).endsWith(".ready") && args[1] === "r") {
+        const close = handle.close.bind(handle);
+        handles.push(close);
+        handle.close = async () => { closes++; await close(); };
+        if (code) handle.stat = async () => { throw failure; };
+      }
+      return handle;
+    };
+    if (code) {
+      await assert.rejects(
+        bridge._promoteLocalTransferForTests(staged, target),
+        (error) => error === failure,
+      );
+      assert.equal(fs.existsSync(target), false);
+    } else {
+      await bridge._promoteLocalTransferForTests(staged, target);
+      assert.equal(fs.readFileSync(target, "utf8"), "download");
+    }
+    assert.equal(handles.length, 1);
+    assert.equal(closes, 1, "close the owned handle without relying on GC");
+  });
+}
