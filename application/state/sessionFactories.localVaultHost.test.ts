@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createHostTerminalSession } from "./sessionFactories.ts";
 import { createLocalTerminalSession } from "./sessionFactories.ts";
+import { resolveTerminalSessionHost } from "../../domain/terminalHostResolution";
 import type { Host } from "../../domain/models";
 
 const localVaultHost = (overrides: Partial<Host> = {}): Host => ({
@@ -93,4 +94,51 @@ test("createLocalTerminalSession is unaffected by vault local hosts", () => {
   const session = createLocalTerminalSession("session-3", { shellName: "CMD" });
   assert.equal(session.hostId, "local-terminal");
   assert.equal(session.localShellName, "CMD");
+});
+
+test("createHostTerminalSession snapshots an explicit no-args local shell as an empty array", () => {
+  // Legacy vault hosts can predate localShellArgs, so the field may be
+  // absent on the Host; the session snapshot must still distinguish
+  // "launched with no args" ([]) from "no metadata" (undefined).
+  const host = localVaultHost({
+    localShell: "cmd",
+    localShellName: "Command Prompt",
+    os: "windows",
+  });
+  const session = createHostTerminalSession("session-noargs", host);
+
+  assert.ok(Array.isArray(session.localShellArgs), "args snapshot must be present");
+  assert.deepEqual(session.localShellArgs, []);
+});
+
+test("resolveTerminalSessionHost does not merge edited host args into a no-args local snapshot", () => {
+  const launchTimeHost = localVaultHost({
+    localShell: "cmd",
+    localShellName: "Command Prompt",
+    os: "windows",
+  });
+  const session = createHostTerminalSession("session-1", launchTimeHost);
+
+  // The saved host was later edited to a shell with args; the snapshot taken
+  // at launch time must win so the clone relaunches CMD, not WSL.
+  const editedHost: Host = {
+    ...launchTimeHost,
+    label: "Edited WSL",
+    localShell: "wsl-ubuntu",
+    localShellArgs: ["--cd", "/elsewhere"],
+    localShellName: "Ubuntu (WSL)",
+    localStartDir: "/elsewhere",
+  };
+
+  const resolved = resolveTerminalSessionHost({
+    session,
+    hosts: [editedHost],
+    groupConfigs: [],
+    proxyProfiles: [],
+    localOs: "windows",
+  });
+
+  assert.equal(resolved.localShell, "cmd");
+  assert.deepEqual(resolved.localShellArgs, []);
+  assert.equal(resolved.localShellName, "Command Prompt");
 });

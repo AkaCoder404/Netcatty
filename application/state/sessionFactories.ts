@@ -19,6 +19,19 @@ export interface LocalTerminalOptions {
  */
 export const LOCAL_TERMINAL_HOST_ID = "local-terminal";
 
+/**
+ * Shared empty-array identity for local-shell args snapshots.
+ *
+ * TerminalSession.localShellArgs is optional, so an `undefined` snapshot is
+ * ambiguous: it can mean "launched with no args" or "legacy session saved
+ * before args were recorded". Snapshotting an explicit no-args launch as `[]`
+ * lets the popup/clone host resolution (`overlaySessionLocalShell`) preserve
+ * the session's actual spawn args instead of merging them with args from an
+ * edited host. One module-level array keeps reference-identity comparisons
+ * (e.g. terminalPaneSessionsEqual) treating equal no-args snapshots as equal.
+ */
+const EMPTY_LOCAL_SHELL_ARGS: string[] = [];
+
 export const createLocalTerminalSession = (
   sessionId: string,
   options?: LocalTerminalOptions,
@@ -121,7 +134,9 @@ export const createHostTerminalSession = (
     ...(host.protocol === "local" ? {
       shellType: classifyLocalShellType(host.localShell, host.os),
       localShell: host.localShell,
-      localShellArgs: host.localShellArgs,
+      // Preserve field presence: an edited host must not contribute its args
+      // to a session that was launched with an explicit shell and no args.
+      localShellArgs: host.localShellArgs ?? EMPTY_LOCAL_SHELL_ARGS,
       localShellName: host.localShellName,
       localShellIcon: host.localShellIcon,
       localStartDir: host.localStartDir,
