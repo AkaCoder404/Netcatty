@@ -173,6 +173,79 @@ test("resolveTerminalSessionHost keeps the session plugin configuration when the
   });
 });
 
+test("resolveTerminalSessionHost preserves the session local-shell snapshot over an edited Vault host", () => {
+  const host: Host = {
+    id: "target",
+    label: "Edited PowerShell",
+    hostname: "localhost",
+    username: "local",
+    protocol: "local",
+    tags: [],
+    os: "windows",
+    localShell: "powershell.exe",
+    localShellArgs: ["-NoLogo"],
+    localShellName: "PowerShell",
+    localShellIcon: "powershell",
+    localStartDir: "C:/edited",
+  };
+
+  const resolved = resolveTerminalSessionHost({
+    session: {
+      ...baseSession,
+      hostname: "localhost",
+      username: "local",
+      port: undefined,
+      protocol: "local",
+      localShell: "cmd.exe",
+      localShellArgs: [],
+      localShellName: "Command Prompt",
+      localShellIcon: "cmd",
+      localStartDir: "C:/project",
+    },
+    hosts: [host],
+    groupConfigs: [],
+    proxyProfiles,
+    localOs: "windows",
+  });
+
+  assert.equal(resolved.localShell, "cmd.exe");
+  assert.deepEqual(resolved.localShellArgs, []);
+  assert.equal(resolved.localShellName, "Command Prompt");
+  assert.equal(resolved.localShellIcon, "cmd");
+  assert.equal(resolved.localStartDir, "C:/project");
+});
+
+test("resolveTerminalSessionHost falls back to the saved local shell when the session has no snapshot", () => {
+  const host: Host = {
+    id: "target",
+    label: "Local Shell",
+    hostname: "localhost",
+    username: "local",
+    protocol: "local",
+    tags: [],
+    os: "windows",
+    localShell: "powershell.exe",
+    localShellName: "PowerShell",
+  };
+
+  const resolved = resolveTerminalSessionHost({
+    session: {
+      ...baseSession,
+      hostname: "localhost",
+      username: "local",
+      port: undefined,
+      protocol: "local",
+    },
+    hosts: [host],
+    groupConfigs: [],
+    proxyProfiles,
+    localOs: "windows",
+  });
+
+  assert.equal(resolved.localShell, "powershell.exe");
+  assert.equal(resolved.localShellName, "PowerShell");
+});
+
 test("resolveTerminalSessionHost carries local session start directory into fallback host", () => {
   const resolved = resolveTerminalSessionHost({
     session: {

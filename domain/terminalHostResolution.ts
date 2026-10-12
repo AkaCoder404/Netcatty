@@ -96,6 +96,22 @@ function buildFallbackHostFromSession(
   };
 }
 
+// A local session carries a shell snapshot (shell path, args, name, icon,
+// start dir) captured at launch time; the saved host may have been edited
+// since. Popup/clone flows must relaunch the session's shell, not the host's
+// current one, so overlay the snapshot onto the resolved host.
+const overlaySessionLocalShell = (session: TerminalSession, host: Host): Host => {
+  if (session.protocol !== "local") return host;
+  return {
+    ...host,
+    localShell: session.localShell ?? host.localShell,
+    localShellArgs: session.localShellArgs ?? host.localShellArgs,
+    localShellName: session.localShellName ?? host.localShellName,
+    localShellIcon: session.localShellIcon ?? host.localShellIcon,
+    localStartDir: session.localStartDir ?? host.localStartDir,
+  };
+};
+
 export function resolveTerminalSessionHost({
   session,
   hosts,
@@ -138,10 +154,12 @@ export function resolveTerminalSessionHost({
     JSON.stringify(pluginConnection) === JSON.stringify(existingHost.pluginConnection) &&
     backspaceBehavior === existingHost.backspaceBehavior
   ) {
-    return suppressDeviceTypeForShellTransport(existingHost);
+    return suppressDeviceTypeForShellTransport(
+      overlaySessionLocalShell(session, existingHost),
+    );
   }
 
-  return suppressDeviceTypeForShellTransport({
+  return suppressDeviceTypeForShellTransport(overlaySessionLocalShell(session, {
     ...existingHost,
     protocol,
     port,
@@ -149,7 +167,7 @@ export function resolveTerminalSessionHost({
     etEnabled,
     pluginConnection,
     backspaceBehavior,
-  });
+  }));
 }
 
 export function resolveTerminalChainHosts({

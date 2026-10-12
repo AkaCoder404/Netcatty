@@ -218,15 +218,17 @@ export function applyGroupDefaults(
   const isSerialHost = host.protocol === 'serial';
 
   // Local-shell hosts run on the user's own machine. Group defaults are
-  // SSH/remote-oriented: a saved startup command was written for the group's
-  // remote hosts and must never be inherited into a local shell, or clicking
-  // a local entry would type/execute that command on the local machine.
+  // SSH/remote-oriented: the SSH credential bundle and a saved startup
+  // command were written for the group's remote hosts and must never be
+  // inherited into a local shell, or clicking a local entry would
+  // type/execute that command on the local machine — and "Copy Credentials"
+  // on a local shell would copy an unrelated remote password.
   const isLocalShellHost = host.protocol === 'local';
 
   for (const key of INHERITABLE_KEYS) {
     if (shouldSkipGroupSshCredentialBundle && SSH_CREDENTIAL_KEYS.has(key)) continue;
     if (isSerialHost && SSH_CREDENTIAL_KEYS.has(key)) continue;
-    if (isLocalShellHost && key === 'startupCommand') continue;
+    if (isLocalShellHost && (SSH_CREDENTIAL_KEYS.has(key) || key === 'startupCommand')) continue;
     if (key === 'password' && effective.savePassword === false) continue;
     if (key === 'telnetIdentityId' && hostHasManualTelnetCredentials) continue;
     if (key === 'proxyProfileId') {
