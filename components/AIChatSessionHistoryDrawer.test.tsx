@@ -71,6 +71,22 @@ test("history drawer filters, pages, clears and explains the bounded search in e
     assert.deepEqual(selected, ["s-140", "s-140"]);
     assert.deepEqual(deleted, ["s-140"]);
 
+    // A pasted suffix must not remain visible while the matcher silently
+    // ignores it: the controlled input and search accept the same prefix.
+    const pastedQuery = "needle ".repeat(36) + "needle absent-tail";
+    await enterQuery(pastedQuery);
+    const boundedInput = renderer.container.querySelector("input")!;
+    assert.equal(boundedInput.value, pastedQuery.slice(0, 256));
+    assert.equal(boundedInput.maxLength, 256);
+    assert.ok(!boundedInput.value.includes("absent-tail"));
+    assert.equal(rows().length, 1);
+    assert.match(rows()[0].textContent ?? "", /Session 140/);
+    await enterQuery("needle absent-tail");
+    assert.equal(boundedInput.value, "needle absent-tail");
+    assert.equal(rows().length, 0, "every visible query token must affect matching");
+    await enterQuery("x".repeat(255) + "\u{1f63a}");
+    assert.equal(boundedInput.value, "x".repeat(255), "do not retain half a surrogate pair");
+
     await enterQuery("[](){}");
     assert.equal(rows().length, 0);
     assert.match(renderer.container.textContent ?? "", /No matches in titles or recent retained content/);
