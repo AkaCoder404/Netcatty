@@ -224,3 +224,19 @@ test("split and copy session clones preserve isolated plugin connection snapshot
   assert.equal(split.reuseConnectionFromSessionId, undefined);
   assert.equal(copied.reuseConnectionFromSessionId, undefined);
 });
+
+for (const clone of [createSplitTerminalSessionClone, createCopiedTerminalSessionClone]) {
+  test(`${clone.name} keeps the type of an explicit local shell despite global settings`, () => {
+    for (const [localShell, shellType] of [["cmd.exe", "cmd"], ["pwsh.exe", "powershell"]] as const) {
+      const source = session({ protocol: "local", localShell, shellType });
+      const copied = clone(source, { id: "clone", localShellType: "posix" });
+      assert.equal(copied.localShell, localShell);
+      assert.equal(copied.shellType, shellType);
+      assert.equal(clone({ ...source, shellType: undefined },
+        { id: "legacy", localShellType: "posix" }).shellType, shellType);
+    }
+    const implicit = clone(session({ protocol: "local", shellType: "cmd" }),
+      { id: "clone-default", localShellType: "posix" });
+    assert.equal(implicit.shellType, "posix", "implicit shells still follow global settings");
+  });
+}
