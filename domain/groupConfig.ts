@@ -176,6 +176,25 @@ const SSH_CREDENTIAL_KEYS = new Set<keyof GroupConfig>([
   'identityFilePaths',
 ]);
 
+// SSH transport/input settings the local-shell editor does not expose: input
+// remapping (backspace), Mosh/Eternal-Terminal transports, and SSH-only
+// algorithm/agent/chain flags. A local shell never runs through SSH, so these
+// defaults would either remap local PTY input (`backspaceBehavior`,
+// createXTermRuntime) or make flag-first consumers report a purely local
+// session as Mosh/ET — with no way to override them in the local editor.
+const SSH_ONLY_TRANSPORT_KEYS = new Set<keyof GroupConfig>([
+  'agentForwarding',
+  'legacyAlgorithms',
+  'skipEcdsaHostKey',
+  'algorithms',
+  'hostChain',
+  'moshEnabled',
+  'moshServerPath',
+  'etEnabled',
+  'etPort',
+  'backspaceBehavior',
+]);
+
 /**
  * Apply group defaults to a host. Only fills in fields the host doesn't already have.
  * Returns a new host object — does NOT mutate the original.
@@ -231,7 +250,7 @@ export function applyGroupDefaults(
   for (const key of INHERITABLE_KEYS) {
     if (shouldSkipGroupSshCredentialBundle && SSH_CREDENTIAL_KEYS.has(key)) continue;
     if (isSerialHost && SSH_CREDENTIAL_KEYS.has(key)) continue;
-    if (isLocalShellHost && (SSH_CREDENTIAL_KEYS.has(key) || key === 'startupCommand' || key === 'deviceType')) continue;
+    if (isLocalShellHost && (SSH_CREDENTIAL_KEYS.has(key) || SSH_ONLY_TRANSPORT_KEYS.has(key) || key === 'startupCommand' || key === 'deviceType')) continue;
     if (key === 'password' && effective.savePassword === false) continue;
     if (key === 'telnetIdentityId' && hostHasManualTelnetCredentials) continue;
     if (key === 'proxyProfileId') {
