@@ -38,3 +38,28 @@ for (const editing of [false, true]) {
     });
   }
 }
+
+// Duplicating a local-shell host opens its copy under a newly generated ID
+// that is not in the vault yet; it must be saved as a new entry, not as an
+// edit (which would no-op and silently discard the duplicate).
+test("local shell save: duplicated host with a new id saves as a new entry", () => {
+  const opened = createLocalShellHost({ label: "cmd (copy)" });
+  const draft = { ...opened, notes: "tweaked" };
+  let saved: Host[] = [];
+  let connected: Host | undefined;
+  const save = new Function(
+    "hosts", "editingLocalShellHost", "onUpdateHosts", "onConnect",
+    "setIsLocalShellHostPanelOpen", "setEditingLocalShellHost",
+    "upsertHostById", "saveWorkSurfaceHostDraft",
+    `${compiled} return save;`,
+  )(
+    [], opened,
+    (hosts: Host[]) => { saved = hosts; }, (host: Host) => { connected = host; },
+    () => {}, () => {}, upsertHostById, saveWorkSurfaceHostDraft,
+  );
+  save(draft, false);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].id, draft.id);
+  assert.equal(saved[0].notes, "tweaked");
+  assert.equal(connected, undefined);
+});

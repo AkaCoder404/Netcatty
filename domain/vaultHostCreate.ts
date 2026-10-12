@@ -185,7 +185,10 @@ const parseKeyPath = (draft: VaultHostDraft): string | undefined => {
 export const buildVaultHostEndpointKey = (
   host: Pick<Host, 'hostname' | 'port' | 'username' | 'protocol'>,
 ): string =>
-  `${(host.protocol ?? 'ssh').toLowerCase()}|${host.hostname.toLowerCase()}|${host.port}|${(host.username ?? '').toLowerCase()}`;
+  // Local-shell hosts created by the vault editor omit `port`, but CSV
+  // export/import round-trips store the effective default (22). Normalize so
+  // a local entry keeps a stable dedupe identity in both forms.
+  `${(host.protocol ?? 'ssh').toLowerCase()}|${host.hostname.toLowerCase()}|${host.protocol === 'local' ? (host.port ?? DEFAULT_SSH_PORT) : host.port}|${(host.username ?? '').toLowerCase()}`;
 
 /**
  * Session identity for vault import/create dedupe.

@@ -695,7 +695,10 @@ const VaultViewInner: React.FC<VaultViewProps> = ({
   }, []);
 
   const handleSaveLocalShellHost = useCallback((host: Host, connectNow?: boolean) => {
-    const updatedHosts = saveWorkSurfaceHostDraft(hosts, editingLocalShellHost
+    // A duplicated local host carries a freshly generated ID that is not in the
+    // vault yet, so it must be saved as a new entry (edit mode would no-op).
+    const editingExistingHost = hosts.some((entry) => entry.id === editingLocalShellHost?.id);
+    const updatedHosts = saveWorkSurfaceHostDraft(hosts, editingExistingHost && editingLocalShellHost
       ? { mode: "edit", openedHost: editingLocalShellHost, requestId: 0 }
       : { mode: "new", defaultGroup: null, requestId: 0 }, host);
     if (updatedHosts) onUpdateHosts(updatedHosts);
