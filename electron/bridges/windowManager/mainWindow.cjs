@@ -76,16 +76,28 @@ function attachDisplayMinimumSync({ win, screen: screenModule, minWidth, minHeig
 
   const onDisplayMetricsChanged = () => applyMinimumForCurrentDisplay();
   const onDisplayRemoved = () => applyMinimumForCurrentDisplay();
+  const onWindowMoved = () => applyMinimumForCurrentDisplay();
   try {
     screenModule.on("display-metrics-changed", onDisplayMetricsChanged);
     screenModule.on("display-removed", onDisplayRemoved);
+    win.on("move", onWindowMoved);
   } catch {
+    try {
+      win.removeListener?.("move", onWindowMoved);
+    } catch {
+      // ignore
+    }
     return () => {};
   }
   return function detachDisplayMinimumSync() {
     try {
       screenModule.removeListener?.("display-metrics-changed", onDisplayMetricsChanged);
       screenModule.removeListener?.("display-removed", onDisplayRemoved);
+    } catch {
+      // ignore
+    }
+    try {
+      win.removeListener?.("move", onWindowMoved);
     } catch {
       // ignore
     }
@@ -295,8 +307,12 @@ function createMainWindowApi(ctx) {
       const detachDisplayMinimumSync = attachDisplayMinimumSync({
         win,
         screen,
-        minWidth: windowMinimumSize.width,
-        minHeight: windowMinimumSize.height,
+        // Pass the configured (layout) minimum as the baseline, not the
+        // display-fitted value resolved above: otherwise a reduced minimum
+        // would become a permanent ceiling and could never grow back to
+        // MIN_WINDOW_WIDTH × MIN_WINDOW_HEIGHT on a larger display.
+        minWidth: MIN_WINDOW_WIDTH,
+        minHeight: MIN_WINDOW_HEIGHT,
       });
 
       // Clear reference when the main window is destroyed
