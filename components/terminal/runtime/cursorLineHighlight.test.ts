@@ -33,7 +33,7 @@ const createFakeTerm = (cols = 80) => {
     onRender: (handler: (element: FakeElement) => void) => { dispose: () => void };
     onDispose: (handler: Handler) => { dispose: () => void };
   }> = [];
-  const markers: Array<{ line: number; disposed: boolean }> = [];
+  const markers: Array<{ line: number; disposed: boolean; dispose: () => void }> = [];
 
   const term = {
     cols,
@@ -474,6 +474,55 @@ test('CursorLineHighlighter restores after the terminal resets its decorations',
   term.scrollOutput(0);
   assert.equal(term.decorations.length, 2);
   assert.equal(term.decorations.at(-1)?.disposed, false);
+  highlighter.dispose();
+});
+
+test('CursorLineHighlighter self-heals when xterm disposes its decorations without a write', () => {
+  const term = createFakeTerm(80);
+  const highlighter = new CursorLineHighlighter(term as never);
+  highlighter.setEnabled(true);
+  assert.equal(term.decorations.at(-1)?.disposed, false);
+
+  // xterm-side disposal (decoration service reset / term.reset): no cursor
+  // move and no write follow, only the next render frame.
+  term.resetDecorations();
+  assert.equal(term.decorations[0]?.disposed, true);
+
+  term.render();
+  assert.equal(term.decorations.at(-1)?.disposed, false);
+  assert.equal(term.decorations.at(-1)?.options.width, 80);
+  highlighter.dispose();
+});
+
+test('CursorLineHighlighter recreates after a buffer clear wipes markers and decorations', () => {
+  const term = createFakeTerm(80);
+  const highlighter = new CursorLineHighlighter(term as never);
+  highlighter.setEnabled(true);
+  assert.equal(term.markers.at(-1)?.disposed, false);
+
+  // term.clear() disposes every marker; decorations follow their markers.
+  for (const marker of term.markers) marker.dispose();
+  term.resetDecorations();
+  assert.equal(term.decorations.at(-1)?.disposed, true);
+
+  term.render();
+  assert.equal(term.decorations.at(-1)?.disposed, false);
+  assert.equal(term.markers.at(-1)?.line, 0);
+  highlighter.dispose();
+});
+
+test('CursorLineHighlighter does not duplicate decorations on redundant renders', () => {
+  const term = createFakeTerm(80);
+  const highlighter = new CursorLineHighlighter(term as never);
+  highlighter.setEnabled(true);
+  const aliveBefore = term.decorations.filter((decoration) => !decoration.disposed).length;
+
+  term.render();
+  term.render();
+  assert.equal(
+    term.decorations.filter((decoration) => !decoration.disposed).length,
+    aliveBefore,
+  );
   highlighter.dispose();
 });
 
