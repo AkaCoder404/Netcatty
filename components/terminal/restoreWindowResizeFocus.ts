@@ -10,7 +10,6 @@ export type MinimalWindow = {
 
 export type MinimalActiveElement = {
   tagName?: string | null;
-  isContentEditable?: boolean;
   matches?: (selector: string) => boolean;
 };
 
@@ -20,25 +19,22 @@ export type MinimalDocument = Parameters<typeof hasOpenAppDialog>[0] & {
 };
 
 /**
- * True when keyboard focus sits in an editable app field (search box, chat
- * input, SFTP filter, inline rename, ...) that is not an xterm helper
- * textarea. Resize-driven restores must not yank focus away from such fields.
+ * True when a real DOM element other than the xterm helper textarea holds
+ * keyboard focus — an editable field (search box, chat input, SFTP filter,
+ * inline rename, ...) as well as non-editable interactive controls that are
+ * keyboard-focusable (buttons, host-tree rows, resize separators, sliders).
+ * Resize-driven restores must not yank focus away from any of them.
  * Focus parked on `body`/`html` (or an xterm helper textarea) does not count
- * as editing another field.
+ * as being held somewhere else, so the restore may proceed.
  */
-export const hasActiveEditableElement = (doc: MinimalDocument | null): boolean => {
+export const hasActiveForeignFocusElement = (doc: MinimalDocument | null): boolean => {
   const element = doc?.activeElement;
   if (!element) return false;
   if (typeof element.matches === "function" && element.matches("textarea.xterm-helper-textarea")) {
     return false;
   }
   const tagName = typeof element.tagName === "string" ? element.tagName.toLowerCase() : "";
-  return (
-    tagName === "input"
-    || tagName === "textarea"
-    || tagName === "select"
-    || Boolean(element.isContentEditable)
-  );
+  return tagName !== "body" && tagName !== "html";
 };
 
 type AttachWindowResizeFocusRestoreOptions = {
@@ -57,9 +53,10 @@ type AttachWindowResizeFocusRestoreOptions = {
  * tab-change refocus path after the resize settles.
  *
  * Restore is skipped when the app window does not hold OS input focus, when a
- * modal dialog is open, or when an editable element other than the xterm
- * helper textarea already holds focus, so the restore never steals typing
- * from elsewhere.
+ * modal dialog is open, or when any element other than the xterm helper
+ * textarea already holds focus (editable fields, but also keyboard-focusable
+ * interactive controls such as buttons or sidebar rows), so the restore never
+ * steals typing or keyboard-navigation position from elsewhere.
  */
 export const attachWindowResizeFocusRestore = (
   {
@@ -81,9 +78,9 @@ export const attachWindowResizeFocusRestore = (
     if (doc?.hasFocus?.() === false) return;
     if (hasOpenAppDialog(doc)) return;
     // The window holds OS focus, but the user may still be typing in a
-    // non-terminal field (terminal search, AI chat, SFTP filter, rename).
-    // Never steal focus from an active editable element.
-    if (hasActiveEditableElement(doc)) return;
+    // non-terminal field or navigating by keyboard (sidebar rows, buttons).
+    // Never steal focus from an element that actually holds it.
+    if (hasActiveForeignFocusElement(doc)) return;
     refocus();
   };
   const handleResize = () => {

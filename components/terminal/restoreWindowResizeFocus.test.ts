@@ -177,7 +177,7 @@ test("resize does not steal focus from an active editable field", () => {
   detach();
 });
 
-test("resize does not steal focus from a contenteditable field", () => {
+test("resize does not steal focus from a non-editable interactive control", () => {
   const win = createWindowStub();
   const scheduler = createScheduler();
   let refocusCalls = 0;
@@ -186,7 +186,9 @@ test("resize does not steal focus from a contenteditable field", () => {
     doc: {
       querySelector: () => null,
       hasFocus: () => true,
-      activeElement: { tagName: "DIV", isContentEditable: true, matches: () => false },
+      // Host-tree sidebar row / composer resize separator: a keyboard-focusable
+      // element that is not editable.
+      activeElement: { tagName: "DIV", matches: () => false },
     } as unknown as MinimalDocument,
     refocus: () => { refocusCalls += 1; },
     scheduleTimeout: scheduler.schedule,
@@ -195,7 +197,30 @@ test("resize does not steal focus from a contenteditable field", () => {
 
   win.emit("resize");
   scheduler.runNext();
-  assert.equal(refocusCalls, 0);
+  assert.equal(refocusCalls, 0, "restore must not yank focus off a focusable row or separator");
+
+  detach();
+});
+
+test("resize restores focus when nothing but the document shell holds focus", () => {
+  const win = createWindowStub();
+  const scheduler = createScheduler();
+  let refocusCalls = 0;
+  const detach = attachWindowResizeFocusRestore({
+    win,
+    doc: {
+      querySelector: () => null,
+      hasFocus: () => true,
+      activeElement: { tagName: "BODY", matches: () => false },
+    } as unknown as MinimalDocument,
+    refocus: () => { refocusCalls += 1; },
+    scheduleTimeout: scheduler.schedule,
+    cancelTimeout: scheduler.cancel,
+  });
+
+  win.emit("resize");
+  scheduler.runNext();
+  assert.equal(refocusCalls, 1, "focus parked on body must still be restored to the terminal");
 
   detach();
 });
