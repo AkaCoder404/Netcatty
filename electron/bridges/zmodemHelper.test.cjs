@@ -1604,6 +1604,28 @@ test("bytes withheld as a header fragment are flushed after the TTL", async () =
   assert.equal(joinedText(terminal), "hello *", "TTL flush must not lose terminal output");
 });
 
+test("a header completed after the TTL flush still leaks no hex bytes", async () => {
+  const { sentry, terminal } = createProbeSentry();
+  const header = buildHexHeaderBytes("ZRQINIT");
+
+  // A stall splits the header right after its first byte; the TTL then
+  // flushes the withheld "*" to the terminal before the remainder arrives.
+  sentry.consume(header.subarray(0, 1));
+  assert.equal(joinedText(terminal), "");
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(joinedText(terminal), "*", "TTL flush must not lose terminal output");
+
+  // The remainder arrives only now (network stall). It must be merged with
+  // the flushed prefix, recognized as a complete header and stripped — most
+  // of its hex/control bytes must not reach the terminal.
+  for (let i = 1; i < header.length; i += 1) {
+    sentry.consume(header.subarray(i, i + 1));
+  }
+  sentry.consume(Buffer.from("$ "));
+  assert.equal(joinedText(terminal), "*$ ", "header remainder leaked after TTL flush");
+  assertNoZmodemHeaderBytes(terminal, "post-flush header completion");
+});
+
 test("output that disproves a header fragment is emitted without delay", () => {
   const stream = Buffer.from("text **\x18Bxy more");
   for (let chunkSize = 1; chunkSize <= 6; chunkSize += 1) {

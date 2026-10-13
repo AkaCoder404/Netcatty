@@ -133,6 +133,16 @@ function createZmodemSentry(opts) {
   let pendingTerminalSuppressionAt = 0;
   let pendingHexHeaderFragment = null;
   let pendingHexHeaderFragmentTimer = null;
+  // Bytes at the head of the deferred fragment stream that were already
+  // printed to the terminal by the TTL flush. They may still be the head of
+  // a header whose remainder arrives later (e.g. after a transport stall),
+  // so the deferred stream must keep them for stripping — but they must
+  // never be printed a second time (#3660).
+  let flushedHexHeaderPrefix = null;
+  // Fragment index recorded by the most recent deferIncompleteHexHeader()
+  // call, so the terminal pipeline can tell "withheld everything" apart
+  // from "withheld a tail".
+  let deferredHexHeaderFragmentAt = -1;
   // Set when a stripped hex header's trailing XON (0x11) may arrive in the
   // next terminal-output chunk; at most one byte is then dropped.
   let suppressNextTerminalXon = false;
@@ -312,8 +322,14 @@ function createZmodemSentry(opts) {
   function flushPendingHexHeaderFragment() {
     pendingHexHeaderFragmentTimer = null;
     const buf = pendingHexHeaderFragment;
-    pendingHexHeaderFragment = null;
-    if (buf?.length) onData(buf);
+    if (!buf?.length) return;
+    // The fragment may still be the head of a header whose remainder arrives
+    // later (transport stall). Print its unprinted tail now (deferrals must
+    // never lose output) but keep the whole fragment deferred and mergeable so
+    // the remainder is stripped, not leaked as garble (#3660).
+    const printedLen = flushedHexHeaderPrefix?.length || 0;
+    flushedHexHeaderPrefix = buf;
+    if (buf.length > printedLen) onData(buf.subarray(printedLen));
   }
 
   /**
@@ -407,6 +423,7 @@ function createZmodemSentry(opts) {
     const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
 
     const fragmentAt = findTrailingHexHeaderFragment(buf);
+    deferredHexHeaderFragmentAt = fragmentAt;
     if (fragmentAt === -1) return buf;
 
     if (fragmentAt < buf.length) {
@@ -601,6 +618,27 @@ function createZmodemSentry(opts) {
       sanitizedOctets = stripPendingTerminalSuppression(sanitizedOctets);
       sanitizedOctets = stripVisibleZmodemHeaders(sanitizedOctets);
       sanitizedOctets = deferIncompleteHexHeader(sanitizedOctets);
+      // Bytes that the TTL flush already printed must not be printed again:
+      // they still lead the deferred stream (so a header split across a
+      // transport stall can complete and be stripped, #3660), but the moment
+      // anything beyond them is emitted — or a stripped header consumed them —
+      // they are gone from the live stream and the marker must be dropped.
+      if (flushedHexHeaderPrefix?.length) {
+        const printed = flushedHexHeaderPrefix;
+        const stillHead =
+          sanitizedOctets.length >= printed.length &&
+          sanitizedOctets.subarray(0, printed.length).equals(printed);
+        if (sanitizedOctets.length) {
+          if (stillHead) {
+            sanitizedOctets = sanitizedOctets.subarray(printed.length);
+          }
+          flushedHexHeaderPrefix = null;
+        } else if (deferredHexHeaderFragmentAt !== 0) {
+          // Empty output without deferring everything means the flushed
+          // bytes were consumed by a stripped header (or vanished).
+          flushedHexHeaderPrefix = null;
+        }
+      }
       if (!sanitizedOctets.length) return;
       onData(sanitizedOctets);
     },
