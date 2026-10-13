@@ -9,17 +9,38 @@ const TERMINAL_KEYBOARD_FOCUS = Symbol("netcattyTerminalKeyboardFocus");
 // #3647: the 1100×640 layout minimum is larger than the usable workspace on
 // small laptops (e.g. 1366×768 at 125% Windows scaling leaves only ~1093×574
 // logical px), which made those windows impossible to fit — let alone shrink.
-// Keep the layout minimum on capable screens, but shrink it on small displays
-// so the window can always fit the primary work area with a small margin.
+// Keep the layout minimum on capable screens, but shrink it to the work area
+// of the display the window targets so the window can always fit with a small
+// margin.
 const MIN_SIZE_FIT_FACTOR = 0.9;
 const MIN_WINDOW_FLOOR_WIDTH = 320;
 const MIN_WINDOW_FLOOR_HEIGHT = 240;
 
-function resolveWindowMinimumSize(screenModule, minWidth, minHeight) {
+function pickTargetDisplay(screenModule, bounds) {
+  if (!screenModule || typeof screenModule.getDisplayMatching !== "function") {
+    return screenModule?.getPrimaryDisplay?.() || null;
+  }
+  try {
+    return screenModule.getDisplayMatching(bounds) || screenModule.getPrimaryDisplay?.() || null;
+  } catch {
+    try {
+      return screenModule.getPrimaryDisplay?.() || null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function resolveWindowMinimumSize(screenModule, minWidth, minHeight, bounds) {
   let effectiveWidth = minWidth;
   let effectiveHeight = minHeight;
   try {
-    const workArea = screenModule?.getPrimaryDisplay?.()?.workArea;
+    // Size for the display the window actually lives on (saved position or
+    // current placement), falling back to the primary display.
+    const display = bounds
+      ? pickTargetDisplay(screenModule, bounds)
+      : screenModule?.getPrimaryDisplay?.();
+    const workArea = display?.workArea;
     if (Number.isFinite(workArea?.width) && workArea.width > 0) {
       effectiveWidth = Math.min(effectiveWidth, Math.floor(workArea.width * MIN_SIZE_FIT_FACTOR));
     }
@@ -32,6 +53,42 @@ function resolveWindowMinimumSize(screenModule, minWidth, minHeight) {
   return {
     width: Math.max(MIN_WINDOW_FLOOR_WIDTH, effectiveWidth),
     height: Math.max(MIN_WINDOW_FLOOR_HEIGHT, effectiveHeight),
+  };
+}
+
+// Keep the BrowserWindow minimum in sync with the display it currently lives
+// on: docking, unplugging a screen, or display-scaling changes can move the
+// window onto a display with a different work area.
+function attachDisplayMinimumSync({ win, screen: screenModule, minWidth, minHeight }) {
+  if (!win || !screenModule || typeof screenModule.on !== "function") return () => {};
+
+  const applyMinimumForCurrentDisplay = () => {
+    try {
+      if (win.isDestroyed?.()) return;
+      const next = resolveWindowMinimumSize(screenModule, minWidth, minHeight, win.getBounds());
+      const [currentWidth, currentHeight] = win.getMinimumSize?.() || [];
+      if (next.width === currentWidth && next.height === currentHeight) return;
+      win.setMinimumSize(next.width, next.height);
+    } catch {
+      // Best-effort only.
+    }
+  };
+
+  const onDisplayMetricsChanged = () => applyMinimumForCurrentDisplay();
+  const onDisplayRemoved = () => applyMinimumForCurrentDisplay();
+  try {
+    screenModule.on("display-metrics-changed", onDisplayMetricsChanged);
+    screenModule.on("display-removed", onDisplayRemoved);
+  } catch {
+    return () => {};
+  }
+  return function detachDisplayMinimumSync() {
+    try {
+      screenModule.removeListener?.("display-metrics-changed", onDisplayMetricsChanged);
+      screenModule.removeListener?.("display-removed", onDisplayRemoved);
+    } catch {
+      // ignore
+    }
   };
 }
 
@@ -142,7 +199,18 @@ function createMainWindowApi(ctx) {
         height: DEFAULT_WINDOW_HEIGHT,
       };
     
-      const windowMinimumSize = resolveWindowMinimumSize(screen, MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT);
+      // Size the minimum to the display the restored window will live on
+      // (a saved position may target a smaller secondary display), falling
+      // back to the primary display when there is no usable saved position.
+      const savedTargetBounds = savedState && Number.isFinite(savedState.x) && Number.isFinite(savedState.y)
+        ? { x: savedState.x, y: savedState.y, width: savedState.width, height: savedState.height }
+        : null;
+      const windowMinimumSize = resolveWindowMinimumSize(
+        screen,
+        MIN_WINDOW_WIDTH,
+        MIN_WINDOW_HEIGHT,
+        savedTargetBounds,
+      );
 
       if (savedState) {
         // Use saved dimensions, but clamp to the minimum so a previously
@@ -221,10 +289,25 @@ function createMainWindowApi(ctx) {
         detachDisplayRecovery = null;
       }
 
+      // #3647: docking / display-scaling changes can move the window onto a
+      // display with a different work area; keep the minimum in sync so the
+      // window can always fit its current display.
+      const detachDisplayMinimumSync = attachDisplayMinimumSync({
+        win,
+        screen,
+        minWidth: windowMinimumSize.width,
+        minHeight: windowMinimumSize.height,
+      });
+
       // Clear reference when the main window is destroyed
       win.on('closed', () => {
         try {
           detachDisplayRecovery?.();
+        } catch {
+          // ignore
+        }
+        try {
+          detachDisplayMinimumSync?.();
         } catch {
           // ignore
         }
@@ -626,6 +709,7 @@ function createMainWindowApi(ctx) {
 }
 
 module.exports = {
+  attachDisplayMinimumSync,
   createMainWindowApi,
   resolveWindowMinimumSize,
   setTerminalKeyboardFocusForWindow,

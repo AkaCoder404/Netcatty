@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { resolveWindowMinimumSize } = require("./mainWindow.cjs");
+const { resolveWindowMinimumSize, attachDisplayMinimumSync } = require("./mainWindow.cjs");
 
 test("uses the static layout minimums when they fit the display", () => {
   const size = resolveWindowMinimumSize(
@@ -10,6 +10,77 @@ test("uses the static layout minimums when they fit the display", () => {
     640,
   );
   assert.deepEqual(size, { width: 1100, height: 640 });
+});
+
+test("sizes the minimum for the display containing the target bounds", () => {
+  const primary = { workArea: { width: 1920, height: 1080 } };
+  const secondary = { workArea: { width: 1093, height: 585 } };
+  const size = resolveWindowMinimumSize(
+    {
+      getPrimaryDisplay: () => primary,
+      getDisplayMatching: (bounds) => (bounds.x > 1920 ? secondary : primary),
+    },
+    1100,
+    640,
+    { x: 2000, y: 0, width: 1000, height: 700 },
+  );
+  assert.deepEqual(size, { width: Math.floor(1093 * 0.9), height: Math.floor(585 * 0.9) });
+});
+
+test("falls back to the primary display when the target cannot be matched", () => {
+  const size = resolveWindowMinimumSize(
+    {
+      getPrimaryDisplay: () => ({ workArea: { width: 1093, height: 585 } }),
+      getDisplayMatching: () => null,
+    },
+    1100,
+    640,
+    { x: 0, y: 0, width: 1000, height: 700 },
+  );
+  assert.deepEqual(size, { width: Math.floor(1093 * 0.9), height: Math.floor(585 * 0.9) });
+});
+
+test("refreshes the window minimum when display metrics change", () => {
+  const { EventEmitter } = require("node:events");
+  const screenModule = new EventEmitter();
+  screenModule.getPrimaryDisplay = () => ({ workArea: { width: 1920, height: 1080 } });
+  const win = new EventEmitter();
+  win.isDestroyed = () => false;
+  win.getBounds = () => ({ x: 0, y: 0, width: 1100, height: 640 });
+  let minimum = { width: 1100, height: 640 };
+  win.getMinimumSize = () => [minimum.width, minimum.height];
+  win.setMinimumSize = (width, height) => { minimum = { width, height }; };
+
+  const detach = attachDisplayMinimumSync({ win, screen: screenModule, minWidth: 1100, minHeight: 640 });
+  try {
+    // Docking change shrinks the primary work area under the window.
+    screenModule.getPrimaryDisplay = () => ({ workArea: { width: 1093, height: 585 } });
+    screenModule.emit("display-metrics-changed");
+    assert.deepEqual(minimum, { width: Math.floor(1093 * 0.9), height: Math.floor(585 * 0.9) });
+
+    // No-op emission keeps the same minimum.
+    screenModule.emit("display-metrics-changed");
+    assert.deepEqual(minimum, { width: Math.floor(1093 * 0.9), height: Math.floor(585 * 0.9) });
+  } finally {
+    detach();
+  }
+});
+
+test("ignores display events after detach", () => {
+  const { EventEmitter } = require("node:events");
+  const screenModule = new EventEmitter();
+  const win = new EventEmitter();
+  win.isDestroyed = () => false;
+  win.getBounds = () => ({ x: 0, y: 0, width: 1100, height: 640 });
+  win.getMinimumSize = () => [1100, 640];
+  let called = 0;
+  win.setMinimumSize = () => { called += 1; };
+
+  const detach = attachDisplayMinimumSync({ win, screen: screenModule, minWidth: 1100, minHeight: 640 });
+  detach();
+  screenModule.emit("display-metrics-changed");
+  screenModule.emit("display-removed");
+  assert.equal(called, 0);
 });
 
 test("shrinks the minimum to fit a small primary work area (#3647)", () => {
