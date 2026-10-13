@@ -6,6 +6,35 @@ const { attachDisplayRecovery } = require("./displayRecovery.cjs");
 
 const TERMINAL_KEYBOARD_FOCUS = Symbol("netcattyTerminalKeyboardFocus");
 
+// #3647: the 1100×640 layout minimum is larger than the usable workspace on
+// small laptops (e.g. 1366×768 at 125% Windows scaling leaves only ~1093×574
+// logical px), which made those windows impossible to fit — let alone shrink.
+// Keep the layout minimum on capable screens, but shrink it on small displays
+// so the window can always fit the primary work area with a small margin.
+const MIN_SIZE_FIT_FACTOR = 0.9;
+const MIN_WINDOW_FLOOR_WIDTH = 320;
+const MIN_WINDOW_FLOOR_HEIGHT = 240;
+
+function resolveWindowMinimumSize(screenModule, minWidth, minHeight) {
+  let effectiveWidth = minWidth;
+  let effectiveHeight = minHeight;
+  try {
+    const workArea = screenModule?.getPrimaryDisplay?.()?.workArea;
+    if (Number.isFinite(workArea?.width) && workArea.width > 0) {
+      effectiveWidth = Math.min(effectiveWidth, Math.floor(workArea.width * MIN_SIZE_FIT_FACTOR));
+    }
+    if (Number.isFinite(workArea?.height) && workArea.height > 0) {
+      effectiveHeight = Math.min(effectiveHeight, Math.floor(workArea.height * MIN_SIZE_FIT_FACTOR));
+    }
+  } catch {
+    // screen unavailable (e.g. before app ready): keep the static minimums
+  }
+  return {
+    width: Math.max(MIN_WINDOW_FLOOR_WIDTH, effectiveWidth),
+    height: Math.max(MIN_WINDOW_FLOOR_HEIGHT, effectiveHeight),
+  };
+}
+
 function setTerminalKeyboardFocusForWindow(win, focused) {
   if (!win || win.isDestroyed?.() || !win.webContents) return false;
   const isFocused = focused === true;
@@ -113,11 +142,13 @@ function createMainWindowApi(ctx) {
         height: DEFAULT_WINDOW_HEIGHT,
       };
     
+      const windowMinimumSize = resolveWindowMinimumSize(screen, MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT);
+
       if (savedState) {
         // Use saved dimensions, but clamp to the minimum so a previously
         // shrunk window from an older build cannot start below the minimum.
-        windowBounds.width = Math.max(savedState.width, MIN_WINDOW_WIDTH);
-        windowBounds.height = Math.max(savedState.height, MIN_WINDOW_HEIGHT);
+        windowBounds.width = Math.max(savedState.width, windowMinimumSize.width);
+        windowBounds.height = Math.max(savedState.height, windowMinimumSize.height);
     
         // Only use saved position if the screen is available at that location
         if (typeof savedState.x === "number" && typeof savedState.y === "number") {
@@ -149,8 +180,8 @@ function createMainWindowApi(ctx) {
 
       const win = new BrowserWindow({
         ...windowBounds,
-        minWidth: MIN_WINDOW_WIDTH,
-        minHeight: MIN_WINDOW_HEIGHT,
+        minWidth: windowMinimumSize.width,
+        minHeight: windowMinimumSize.height,
         backgroundColor,
         icon: appIcon,
         show: false,
@@ -596,5 +627,6 @@ function createMainWindowApi(ctx) {
 
 module.exports = {
   createMainWindowApi,
+  resolveWindowMinimumSize,
   setTerminalKeyboardFocusForWindow,
 };
