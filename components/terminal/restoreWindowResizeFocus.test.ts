@@ -154,6 +154,78 @@ test("resize restore is skipped while a modal dialog is open", () => {
   detach();
 });
 
+test("resize does not steal focus from an active editable field", () => {
+  const win = createWindowStub();
+  const scheduler = createScheduler();
+  let refocusCalls = 0;
+  const detach = attachWindowResizeFocusRestore({
+    win,
+    doc: {
+      querySelector: () => null,
+      hasFocus: () => true,
+      activeElement: { tagName: "INPUT", matches: () => false },
+    } as unknown as MinimalDocument,
+    refocus: () => { refocusCalls += 1; },
+    scheduleTimeout: scheduler.schedule,
+    cancelTimeout: scheduler.cancel,
+  });
+
+  win.emit("resize");
+  scheduler.runNext();
+  assert.equal(refocusCalls, 0, "restore must not yank focus out of an editable field");
+
+  detach();
+});
+
+test("resize does not steal focus from a contenteditable field", () => {
+  const win = createWindowStub();
+  const scheduler = createScheduler();
+  let refocusCalls = 0;
+  const detach = attachWindowResizeFocusRestore({
+    win,
+    doc: {
+      querySelector: () => null,
+      hasFocus: () => true,
+      activeElement: { tagName: "DIV", isContentEditable: true, matches: () => false },
+    } as unknown as MinimalDocument,
+    refocus: () => { refocusCalls += 1; },
+    scheduleTimeout: scheduler.schedule,
+    cancelTimeout: scheduler.cancel,
+  });
+
+  win.emit("resize");
+  scheduler.runNext();
+  assert.equal(refocusCalls, 0);
+
+  detach();
+});
+
+test("resize still restores while the xterm helper textarea is focused", () => {
+  const win = createWindowStub();
+  const scheduler = createScheduler();
+  let refocusCalls = 0;
+  const detach = attachWindowResizeFocusRestore({
+    win,
+    doc: {
+      querySelector: () => null,
+      hasFocus: () => true,
+      activeElement: {
+        tagName: "TEXTAREA",
+        matches: (selector: string) => selector === "textarea.xterm-helper-textarea",
+      },
+    } as unknown as MinimalDocument,
+    refocus: () => { refocusCalls += 1; },
+    scheduleTimeout: scheduler.schedule,
+    cancelTimeout: scheduler.cancel,
+  });
+
+  win.emit("resize");
+  scheduler.runNext();
+  assert.equal(refocusCalls, 1, "terminal-owned focus must be restored after resize");
+
+  detach();
+});
+
 test("detach removes the listener and cancels a pending restore", () => {
   const win = createWindowStub();
   const scheduler = createScheduler();

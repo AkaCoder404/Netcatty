@@ -8,8 +8,37 @@ export type MinimalWindow = {
   removeEventListener?: (type: string, listener: () => void) => unknown;
 };
 
+export type MinimalActiveElement = {
+  tagName?: string | null;
+  isContentEditable?: boolean;
+  matches?: (selector: string) => boolean;
+};
+
 export type MinimalDocument = Parameters<typeof hasOpenAppDialog>[0] & {
   hasFocus?: () => boolean;
+  activeElement?: MinimalActiveElement | null;
+};
+
+/**
+ * True when keyboard focus sits in an editable app field (search box, chat
+ * input, SFTP filter, inline rename, ...) that is not an xterm helper
+ * textarea. Resize-driven restores must not yank focus away from such fields.
+ * Focus parked on `body`/`html` (or an xterm helper textarea) does not count
+ * as editing another field.
+ */
+export const hasActiveEditableElement = (doc: MinimalDocument | null): boolean => {
+  const element = doc?.activeElement;
+  if (!element) return false;
+  if (typeof element.matches === "function" && element.matches("textarea.xterm-helper-textarea")) {
+    return false;
+  }
+  const tagName = typeof element.tagName === "string" ? element.tagName.toLowerCase() : "";
+  return (
+    tagName === "input"
+    || tagName === "textarea"
+    || tagName === "select"
+    || Boolean(element.isContentEditable)
+  );
 };
 
 type AttachWindowResizeFocusRestoreOptions = {
@@ -27,8 +56,10 @@ type AttachWindowResizeFocusRestoreOptions = {
  * back into the terminal. Attach a window `resize` listener that re-runs the
  * tab-change refocus path after the resize settles.
  *
- * Restore is skipped when the app window does not hold OS input focus, or when
- * a modal dialog is open, so the restore never steals typing from elsewhere.
+ * Restore is skipped when the app window does not hold OS input focus, when a
+ * modal dialog is open, or when an editable element other than the xterm
+ * helper textarea already holds focus, so the restore never steals typing
+ * from elsewhere.
  */
 export const attachWindowResizeFocusRestore = (
   {
@@ -49,6 +80,10 @@ export const attachWindowResizeFocusRestore = (
     timerId = null;
     if (doc?.hasFocus?.() === false) return;
     if (hasOpenAppDialog(doc)) return;
+    // The window holds OS focus, but the user may still be typing in a
+    // non-terminal field (terminal search, AI chat, SFTP filter, rename).
+    // Never steal focus from an active editable element.
+    if (hasActiveEditableElement(doc)) return;
     refocus();
   };
   const handleResize = () => {
