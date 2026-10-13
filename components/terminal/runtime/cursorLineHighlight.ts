@@ -169,7 +169,9 @@ export class CursorLineHighlighter implements IDisposable {
 
     this.marker = marker;
     this.decorations = decorations;
-    this.decorationsAlive = decorations.length > 0;
+    // An empty set is valid when the whole row already has ANSI backgrounds or
+    // inverse cells. Tracking stays intact so later frames do not churn markers.
+    this.decorationsAlive = true;
     this.decorationDisposeListeners = decorations.map((decoration) =>
       decoration.onDispose(() => {
         if (this.decorations.includes(decoration)) {

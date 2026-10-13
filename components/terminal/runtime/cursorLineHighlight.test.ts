@@ -526,6 +526,35 @@ test('CursorLineHighlighter does not duplicate decorations on redundant renders'
   highlighter.dispose();
 });
 
+test('CursorLineHighlighter does not churn markers when a fully colored row has no decorations', () => {
+  const cols = 8;
+  const term = createFakeTerm(cols);
+  // Every cell has an explicit ANSI background and the row is full, so both
+  // highlight ranges and the blank tail are legitimately empty.
+  term.setColoredBackgrounds(Array.from({ length: cols }, (_, column) => column));
+  const highlighter = new CursorLineHighlighter(term as never);
+  highlighter.setEnabled(true);
+
+  assert.equal(term.decorations.length, 0);
+  assert.equal(term.markers.length, 1);
+  const marker = term.markers[0];
+  assert.ok(marker);
+  assert.equal(marker.disposed, false);
+  assert.equal(marker.line, 0);
+  const aliveBefore = term.markers.filter((candidate) => !candidate.disposed).length;
+
+  term.render();
+  term.render();
+  term.render();
+
+  assert.equal(term.markers.length, 1);
+  assert.equal(term.markers.filter((candidate) => !candidate.disposed).length, aliveBefore);
+  assert.equal(marker.disposed, false);
+  assert.equal(marker.line, 0);
+  assert.equal(term.decorations.length, 0);
+  highlighter.dispose();
+});
+
 test('CursorLineHighlighter clears in the alternate buffer and restores in normal buffer', () => {
   const term = createFakeTerm(80);
   const highlighter = new CursorLineHighlighter(term as never);
