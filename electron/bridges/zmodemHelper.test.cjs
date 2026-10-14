@@ -583,6 +583,78 @@ test("awaitUploadDrainWithProgress adds no polling delay when drain resolves imm
   assert.ok(Date.now() - startedAt < 50);
 });
 
+test("awaitUploadDrainWithProgress returns promptly when drain settles during the poll interval", async () => {
+  let releaseDrain;
+  const drainGate = new Promise((resolve) => {
+    releaseDrain = resolve;
+  });
+  let parked = false;
+  const done = awaitUploadDrainWithProgress(
+    {
+      waitForDrain: () => drainGate,
+      getTransportPendingBytes: () => 2048,
+    },
+    () => {
+      parked = true;
+    },
+  );
+
+  const waitStarted = Date.now();
+  while (!parked) {
+    if (Date.now() - waitStarted > 1000) {
+      throw new Error("upload drain wait never parked");
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  // The immediate park emission has run and the poll timer (~100ms) is armed.
+  // Settle on the next turn, still inside that interval.
+  await new Promise((resolve) => setImmediate(resolve));
+  const releasedAt = Date.now();
+  releaseDrain();
+  await done;
+  const elapsed = Date.now() - releasedAt;
+  assert.ok(
+    elapsed < 50,
+    `drain settlement during a poll interval resumed in ${elapsed}ms`,
+  );
+});
+
+test("awaitUploadDrainWithProgress propagates a rejection that arrives during the poll interval", async () => {
+  let rejectDrain;
+  const drainGate = new Promise((_, reject) => {
+    rejectDrain = reject;
+  });
+  const err = new Error("Transport drain timeout");
+  err.code = "NETCATTY_ZMODEM_TIMEOUT";
+  let parked = false;
+  const done = awaitUploadDrainWithProgress(
+    {
+      waitForDrain: () => drainGate,
+      getTransportPendingBytes: () => 2048,
+    },
+    () => {
+      parked = true;
+    },
+  );
+
+  const waitStarted = Date.now();
+  while (!parked) {
+    if (Date.now() - waitStarted > 1000) {
+      throw new Error("upload drain wait never parked");
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  const releasedAt = Date.now();
+  rejectDrain(err);
+  await assert.rejects(done, (caught) => caught === err);
+  const elapsed = Date.now() - releasedAt;
+  assert.ok(
+    elapsed < 50,
+    `drain rejection during a poll interval resumed in ${elapsed}ms`,
+  );
+});
+
 test("awaitUploadDrainWithProgress emits progress while parked until drain settles", async () => {
   let releaseDrain;
   const drainGate = new Promise((resolve) => {

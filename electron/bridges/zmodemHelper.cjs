@@ -1186,8 +1186,18 @@ async function awaitUploadDrainWithProgress(opts, emitProgress) {
   // the transport drains its backlog. Progress emissions must never break
   // (or slow) the transfer itself.
   try { emitProgress(); } catch { /* ignore */ }
+  // Race each poll delay against drain. A wait that settles mid-interval
+  // must resume the upload immediately; sleeping out the rest of the
+  // interval throttles every backpressure cycle by up to ~100ms.
   while (!settled) {
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    let timer;
+    await Promise.race([
+      drain.then(() => {}, () => {}),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, intervalMs);
+      }),
+    ]);
+    clearTimeout(timer);
     if (settled) break;
     try { emitProgress(); } catch { /* ignore */ }
   }
