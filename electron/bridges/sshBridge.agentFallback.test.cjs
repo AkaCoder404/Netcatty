@@ -9,6 +9,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { Server } = require("ssh2");
 const bridge = require("./sshBridge.cjs");
+const tempDirBridge = require("./tempDirBridge.cjs");
 
 const listen = (server, ...args) => new Promise((resolve, reject) => {
   server.once("error", reject);
@@ -20,7 +21,7 @@ test("normal SSH startup preserves fallback after an unavailable system agent", 
   skip: process.platform === "win32", // This fixture exercises Unix agent sockets.
   timeout: 20_000,
 }, async (t) => {
-  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "nc-agent-"));
+  const fixture = fs.mkdtempSync(`${tempDirBridge.getTempFilePath("a")}-`);
   const originalHomedir = os.homedir;
   const originalAgentSocket = process.env.SSH_AUTH_SOCK;
   os.homedir = () => fixture; // Never discover the developer's default keys.
@@ -37,9 +38,9 @@ test("normal SSH startup preserves fallback after an unavailable system agent", 
   }).privateKey;
 
   let sequence = 0;
-  async function run({ stale = true, useSshAgent, password = "fixture-password", stall = false } = {}) {
+  async function run({ stale = true, useSshAgent, password = "fixture-password", stall = false, jump = false } = {}) {
     const senderId = 3640 + sequence++;
-    const socketPath = path.join(fixture, "agent.sock");
+    const socketPath = path.join(fixture, "s");
     fs.rmSync(socketPath, { force: true });
     const agentClients = new Set();
     let agentChecks = 0;
@@ -61,12 +62,24 @@ test("normal SSH startup preserves fallback after an unavailable system agent", 
     }
     process.env.SSH_AUTH_SOCK = socketPath;
     const sshClients = new Set();
+    const forwardingSockets = new Set();
     const methods = [];
     let shells = 0;
     const ssh = new Server({ hostKeys: [hostKey] }, (client) => {
       sshClients.add(client);
       client.on("error", () => {});
       client.on("close", () => sshClients.delete(client));
+      client.on("tcpip", (accept, reject, info) => {
+        if (info.destIP !== "127.0.0.1" || info.destPort !== ssh.address().port) return reject();
+        const socket = net.connect(info.destPort, info.destIP, () => {
+          const stream = accept();
+          stream.on("error", () => socket.destroy());
+          stream.pipe(socket).pipe(stream);
+        });
+        forwardingSockets.add(socket);
+        socket.on("close", () => forwardingSockets.delete(socket));
+        socket.on("error", () => reject());
+      });
       client.on("authentication", (ctx) => {
         methods.push(ctx.method);
         if (ctx.method === "password" && stall) return;
@@ -96,6 +109,11 @@ test("normal SSH startup preserves fallback after an unavailable system agent", 
         username: "fixture", password, authMethod: "auto", useSshAgent,
         verifyHostKeys: false, reuseTransport: false, skipShellPidDiscovery: true,
         sshTcpConnectTimeoutMs: 1000, sshAuthReadyTimeoutMs: 1000,
+        ...(jump ? { jumpHosts: [{
+          hostname: "127.0.0.1", port: ssh.address().port, username: "fixture",
+          password, authMethod: "auto", useSshAgent,
+          sshTcpConnectTimeoutMs: 1000, sshAuthReadyTimeoutMs: 1000,
+        }] } : {}),
       });
       let error;
       try {
@@ -107,6 +125,7 @@ test("normal SSH startup preserves fallback after an unavailable system agent", 
     } finally {
       clearTimeout(guard);
       for (const client of sshClients) client.end();
+      for (const socket of forwardingSockets) socket.destroy();
       for (const client of agentClients) client.destroy();
       if (agent.listening) await close(agent);
       await close(ssh);
@@ -150,5 +169,25 @@ test("normal SSH startup preserves fallback after an unavailable system agent", 
     assert.ok(result.sent.some(({ channel, payload }) => (
       channel === "netcatty:exit" && payload.reason === "timeout"
     )));
+  });
+  await t.test("a stale jump-host agent still reaches a shell through saved passwords", async () => {
+    const result = await run({ jump: true });
+    assert.equal(result.error, undefined);
+    assert.deepEqual(result.methods, ["none", "password", "none", "password"]);
+    assert.equal(result.shells, 1);
+    assert.equal(result.sent.some(({ channel }) => channel === "netcatty:auth:failed"), false);
+  });
+  await t.test("a fatal jump-host auth error after its agent error still rejects", async () => {
+    const result = await run({ jump: true, password: "wrong-password" });
+    assert.equal(result.error?.level, "client-authentication");
+    assert.equal(result.error?.isJumpHostAuthError, true);
+    assert.deepEqual(result.methods, ["none", "password"]);
+    assert.equal(result.shells, 0);
+  });
+  await t.test("a stalled jump-host password retains its authentication deadline", async () => {
+    const result = await run({ jump: true, stall: true });
+    assert.match(result.error?.message || "", /Connection timeout to 127\.0\.0\.1/);
+    assert.deepEqual(result.methods, ["none", "password"]);
+    assert.equal(result.shells, 0);
   });
 });
