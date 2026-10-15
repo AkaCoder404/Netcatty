@@ -698,6 +698,9 @@ function createStartSessionApi(ctx) {
         if (streamExitSignal && sessions.get(sessionId) === session) {
           session._remoteExitSignal = streamExitSignal;
         }
+        if (streamExited && sessions.get(sessionId) === session) {
+          session._remoteExitCode = streamExitCode;
+        }
       });
 
       let closeFinalized = false;
@@ -2664,12 +2667,14 @@ function createStartSessionApi(ctx) {
                   idleTimedOut: false,
                 }));
               } else {
-                // No shell exit status was reported before transport close.
-                // Do not invent a successful exit code for this teardown.
+                // Preserve a shell status already received before transport
+                // close; otherwise do not invent a successful exit code.
                 safeSendSessionExit({ safeSend, electronModule, sessions }, contents, sessionId, {
                   sessionId,
                   reason: "closed",
-                  remoteClosedWithoutExitStatus: true,
+                  ...(typeof session?._remoteExitCode === "number"
+                    ? { exitCode: session._remoteExitCode }
+                    : { remoteClosedWithoutExitStatus: true }),
                   _terminalSessionGeneration: session?._terminalSessionGeneration,
                 });
               }
