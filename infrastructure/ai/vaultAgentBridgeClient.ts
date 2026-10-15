@@ -559,12 +559,12 @@ export interface VaultAgentApiDeps {
   /**
    * Find an existing terminal session for a vault host so `host.open` can
    * reuse it instead of always opening a new tab. Reconnecting SSH tabs keep
-   * the same sessionId, so disconnected sessions must be matched too.
+   * the same sessionId. Check the opening connection identity before reuse.
    */
   findExistingSessionForHost?: (hostId: string) => {
     sessionId: string;
     connected: boolean;
-  } | undefined;
+  } | undefined | Promise<{ sessionId: string; connected: boolean } | undefined>;
   closeSession?: (sessionId: string) => {
     ok: true;
   } | {
@@ -703,7 +703,7 @@ export async function handleVaultAgentOp(
       // reconnecting session for this host unless the caller forces a new tab.
       const wantsNewTab = parseOptionalBoolean(params.newTab) ?? false;
       const existing = !wantsNewTab
-        ? deps.findExistingSessionForHost?.(effectiveHost.id)
+        ? await deps.findExistingSessionForHost?.(effectiveHost.id)
         : undefined;
       if (existing) {
         await registerOpenedSessionInMcpScope(

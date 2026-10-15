@@ -1,0 +1,90 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import React from 'react';
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import type { Host, Identity, SSHKey, TerminalSession } from '../../domain/models';
+import { useHostOpenSessionReuse } from './useHostOpenSessionReuse';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const effective = (host: Host) => host;
+const host = (extra: Partial<Host> = {}): Host => ({
+  id: 'host', hostname: 'original.invalid', username: 'user', label: 'Original', os: 'linux', tags: [], protocol: 'ssh', ...extra,
+});
+
+async function harness(initial: Host, extra: { hosts?: Host[]; keys?: SSHKey[]; identities?: Identity[] } = {}) {
+  let hosts = [initial, ...(extra.hosts ?? [])];
+  let keys = extra.keys ?? [];
+  let identities = extra.identities ?? [];
+  let sessions: TerminalSession[] = [{ id: 'tab', hostId: initial.id, hostname: initial.hostname, username: initial.username, hostLabel: initial.label, protocol: initial.protocol, port: initial.port, status: 'connected' }];
+  let find: ReturnType<typeof useHostOpenSessionReuse>;
+  function Harness() {
+    find = useHostOpenSessionReuse({ sessions, hosts, keys, identities, resolveEffectiveHost: effective });
+    return null;
+  }
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(React.createElement(Harness)); });
+  return {
+    find: () => find(initial.id),
+    async update(input: { host?: Host; hosts?: Host[]; keys?: SSHKey[]; identities?: Identity[]; sessions?: TerminalSession[] }) {
+      hosts = input.hosts ?? (input.host ? [input.host, ...hosts.slice(1)] : hosts);
+      keys = input.keys ?? keys;
+      identities = input.identities ?? identities;
+      sessions = input.sessions ?? sessions;
+      await act(async () => renderer.update(React.createElement(Harness)));
+    },
+    close: () => act(async () => renderer.unmount()),
+  };
+}
+
+for (const [field, value] of [
+  ['hostname', 'replacement.invalid'], ['username', 'other-user'], ['port', 2222],
+  ['protocol', 'telnet'], ['password', 'new-password'], ['authMethod', 'key'],
+  ['hostChain', { hostIds: ['jump'] }],
+  ['proxyConfig', { type: 'socks5', host: 'proxy.invalid', port: 1080 }],
+] as const) {
+  test(`a saved ${field} edit cannot reuse the old tab`, async (t) => {
+    const original = host({ password: 'old-password', authMethod: 'password' });
+    const api = await harness(original, { hosts: [host({ id: 'jump', hostname: 'jump.invalid' })] });
+    t.after(api.close);
+    assert.equal((await api.find())?.sessionId, 'tab');
+    await api.update({ host: { ...original, [field]: value } });
+    assert.equal(await api.find(), undefined);
+  });
+}
+
+test('renaming the target and jump host keeps the same tab eligible', async (t) => {
+  const original = host({ hostChain: { hostIds: ['jump'] } });
+  const jump = host({ id: 'jump', hostname: 'jump.invalid' });
+  const api = await harness(original, { hosts: [jump] });
+  t.after(api.close);
+  await api.update({ hosts: [{ ...original, label: 'Renamed', fontSize: 16, notes: 'Updated note' }, { ...jump, label: 'Renamed jump' }] });
+  assert.equal((await api.find())?.sessionId, 'tab');
+});
+
+test('changing a jump endpoint or its password rejects the original connection', async (t) => {
+  const original = host({ hostChain: { hostIds: ['jump'] } });
+  const jump = host({ id: 'jump', hostname: 'jump.invalid', password: 'old' });
+  const api = await harness(original, { hosts: [jump] });
+  t.after(api.close);
+  for (const changed of [{ ...jump, hostname: 'new-jump.invalid' }, { ...jump, password: 'new' }]) {
+    await api.update({ hosts: [original, changed] });
+    assert.equal(await api.find(), undefined);
+  }
+});
+
+test('rotating a referenced identity or key keeps stable IDs from masking auth changes', async (t) => {
+  const identity: Identity = { id: 'identity', label: 'Login', username: 'user', password: 'old', authMethod: 'password', created: 0 };
+  const original = host({ identityId: identity.id });
+  const api = await harness(original, { identities: [identity] });
+  t.after(api.close);
+  assert.equal((await api.find())?.sessionId, 'tab');
+  await api.update({ identities: [{ ...identity, password: 'rotated' }] });
+  assert.equal(await api.find(), undefined);
+  const key: SSHKey = { id: 'key', label: 'Key', type: 'ED25519', privateKey: 'old-key', source: 'generated', category: 'key', created: 0 };
+  const keyHost = host({ identityFileId: key.id, authMethod: 'key' });
+  const keyApi = await harness(keyHost, { keys: [key] });
+  t.after(keyApi.close);
+  assert.equal((await keyApi.find())?.sessionId, 'tab');
+  await keyApi.update({ keys: [{ ...key, privateKey: 'rotated-key' }] });
+  assert.equal(await keyApi.find(), undefined);
+});

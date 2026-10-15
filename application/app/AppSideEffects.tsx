@@ -53,7 +53,7 @@ import {
 } from '../../domain/terminalAppearance';
 import { selectConnectionLogForTerminalDataCapture } from '../../domain/connectionLog';
 import { collectSessionIds } from '../../domain/workspace';
-import { findReusableHostSession } from '../../domain/hostOpenSession';
+import { useHostOpenSessionReuse } from '../state/useHostOpenSessionReuse';
 import type { PaneMagnificationController } from '../../domain/paneMagnification';
 import { resolveCloseIntent } from '../state/resolveCloseIntent';
 import { resolveSnippetsShortcutIntent } from '../state/resolveSnippetsShortcutIntent';
@@ -1433,9 +1433,9 @@ export function AppSideEffects() {
     return { ok: true as const, sessionId, host };
   }, [handleConnectToHost]);
 
-  const findExistingSessionForHostForVaultAgent = useCallback((hostId: string) => {
-    return findReusableHostSession(sessions, hostId);
-  }, [sessions]);
+  const findExistingSessionForHostForVaultAgent = useHostOpenSessionReuse({
+    sessions, hosts, keys, identities, resolveEffectiveHost,
+  });
 
   const closeSessionForVaultAgent = useCallback((sessionId: string) => {
     if (!sessions.some((session) => session.id === sessionId)) {
