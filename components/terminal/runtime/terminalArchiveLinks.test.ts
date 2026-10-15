@@ -8,15 +8,19 @@ function fixture() {
   let text = 'backup.tar.gz';
   let enabled = true, ready = true, registrationDisposed = false, wrapped = false;
   const pasted: string[] = [];
+  let submitted: (data: string) => void = () => {};
+  let markerLine = -1;
   const term = {
     buffer: { active: { getLine: (y: number) => y === 0 ? { translateToString: () => text, isWrapped: wrapped } : undefined } },
     paste: (value: string) => { pasted.push(value); ready = false; },
     focus: () => {},
+    registerMarker: () => ({ line: markerLine, isDisposed: false, dispose() { this.isDisposed = true; } }),
+    onData: (listener: (data: string) => void) => { submitted = listener; return { dispose() {} }; },
     registerLinkProvider: (next: ILinkProvider) => { provider = next; return { dispose: () => { registrationDisposed = true; } }; },
   };
   const registration = registerTerminalArchiveLinks({ term: term as unknown as Terminal, isEnabled: () => enabled, isInputReady: () => ready });
   const links = () => { let value: ILink[] | undefined; provider.provideLinks(1, result => { value = result; }); return value; };
-  return { links, pasted, registration, setText: (value: string) => { text = value; }, setReady: (value: boolean) => { ready = value; }, setEnabled: (value: boolean) => { enabled = value; }, setWrapped: () => { wrapped = true; }, isDisposed: () => registrationDisposed };
+  return { links, pasted, registration, submit: () => { markerLine = 0; submitted('\r'); }, setText: (value: string) => { text = value; }, setReady: (value: boolean) => { ready = value; }, setEnabled: (value: boolean) => { enabled = value; }, setWrapped: () => { wrapped = true; }, isDisposed: () => registrationDisposed };
 }
 
 const ctrlClick = { button: 0, ctrlKey: true } as MouseEvent;
@@ -48,4 +52,16 @@ test('stale output and disposed links cannot prepare commands; wrapped fragments
   f.setWrapped(); assert.equal(f.links(), undefined);
   f.registration.dispose(); assert.equal(f.isDisposed(), true);
   link.activate(ctrlClick, link.text); assert.deepEqual(f.pasted, []);
+});
+
+test('submitting another command invalidates old relative names and cached links, but not absolute paths', () => {
+  const f = fixture(), link = f.links()![0];
+  f.submit();
+  assert.deepEqual(f.links(), []);
+  link.activate(ctrlClick, link.text);
+  assert.deepEqual(f.pasted, []);
+  f.setText('/tmp/backup.tar.gz');
+  const absolute = f.links()![0];
+  absolute.activate(ctrlClick, absolute.text);
+  assert.deepEqual(f.pasted, ["tar -xzf '/tmp/backup.tar.gz'"]);
 });

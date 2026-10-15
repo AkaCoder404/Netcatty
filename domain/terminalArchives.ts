@@ -34,6 +34,7 @@ export interface TerminalArchiveMatch {
   length: number;
   text: string;
   command: string;
+  relative: boolean;
 }
 
 /** One printed token, or an explicitly quoted filename containing spaces. */
@@ -43,6 +44,8 @@ export function findTerminalArchives(line: string): TerminalArchiveMatch[] {
     const text = match[0].slice(match[1].length);
     const file = match[2] ?? match[3] ?? match[4];
     const command = archiveCommand(file);
-    return command ? [{ start: match.index + match[1].length, length: text.length, text, command }] : [];
+    return command ? [{ start: match.index + match[1].length, length: text.length, text, command,
+      relative: !file.startsWith('/') && !file.startsWith('~/'),
+    }] : [];
   });
 }
