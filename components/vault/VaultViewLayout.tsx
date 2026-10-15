@@ -1820,7 +1820,11 @@ export function VaultViewLayout({ ctx }: { ctx: VaultViewLayoutContext }) {
           <Combobox
             options={[
               { value: "", label: t("vault.hosts.allHosts") },
-              ...allGroupPaths.map((path: string) => ({ value: path, label: path })),
+              ...allGroupPaths
+                .filter((path: string) => path !== "General"
+                  || customGroups.includes("General")
+                  || allGroupPaths.some((group: string) => group.startsWith("General/")))
+                .map((path: string) => ({ value: path, label: path })),
             ]}
             value={moveTargetGroup}
             onValueChange={setMoveTargetGroup}
