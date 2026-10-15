@@ -183,3 +183,14 @@ test("Unix path highlighting keeps Unicode paths and quoted spaces together", ()
     assert.deepEqual(matches.map((match) => match[0]), [path]);
   }
 });
+
+test("Unix path highlighting keeps punctuation up to the text boundary", () => {
+  const rule = getRule(DEFAULT_KEYWORD_HIGHLIGHT_RULES, "unix-path");
+  for (const path of [
+    "/run/user/1000/gvfs/smb-share:server=nas,share=files/report.txt",
+    "/tmp/build=release/output",
+  ]) {
+    const matches = [...path.matchAll(new RegExp(rule.patterns[0], "gi"))];
+    assert.deepEqual(matches.map((match) => match[0]), [path]);
+  }
+});
