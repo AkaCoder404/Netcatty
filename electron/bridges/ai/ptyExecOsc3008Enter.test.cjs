@@ -28,7 +28,7 @@ function expectedDeliveryLength(marker) {
   return probe + wrapper;
 }
 
-async function driveDelivery(t, pty, writes, marker, { osc }) {
+async function driveDelivery(t, pty, writes, marker, { osc, finalTick = true }) {
   const totalLength = expectedDeliveryLength(marker);
   // Short probe is delivered as a single write; reply to finish probing.
   t.mock.timers.tick(30);
@@ -41,7 +41,7 @@ async function driveDelivery(t, pty, writes, marker, { osc }) {
     if (writes.join("").length >= totalLength) { delivered = true; break; }
   }
   assert.ok(delivered, "wrapper delivery completed");
-  t.mock.timers.tick(60);
+  if (finalTick) t.mock.timers.tick(60);
 }
 
 test("delivery that observes OSC 3008 sends a standalone submit Enter (issue #3676)", async (t) => {
@@ -83,6 +83,48 @@ test("decorative title OSC noise does not trigger the standalone Enter", async (
   });
   await driveDelivery(t, pty, writes, job.marker, { osc: "\x1b]0;user@host: /tmp\x07" });
   assert.notEqual(writes[writes.length - 1], "\n", "title-only noise must not add a standalone Enter");
+  pty.emit("data", `${job.marker}_S\nout\n${job.marker}_E:0\n`);
+  assert.equal((await job.resultPromise).exitCode, 0);
+  pty.emit("close");
+  t.mock.timers.reset();
+});
+
+test("start marker arriving during the recovery delay suppresses the extra Enter", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { pty, writes } = makePty();
+  const job = startPtyJob(pty, COMMAND, {
+    shellKind: "posix", probeLiveShell: true, timeoutMs: 5000,
+  });
+  // Skip the final tick so the recovery Enter is still pending when the marker
+  // arrives; it must then be withheld instead of reaching the command's stdin.
+  await driveDelivery(t, pty, writes, job.marker, { osc: OSC_3008, finalTick: false });
+  pty.emit("data", `${job.marker}_S\nout\n${job.marker}_E:0\n`);
+  assert.ok(writes[writes.length - 1].length > 1, "no standalone Enter was written after foundStart");
+  assert.equal((await job.resultPromise).exitCode, 0);
+  pty.emit("close");
+  t.mock.timers.reset();
+});
+
+test("OSC 3008 split across PTY chunks still triggers the standalone Enter", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { pty, writes } = makePty();
+  const job = startPtyJob(pty, COMMAND, {
+    shellKind: "posix", probeLiveShell: true, timeoutMs: 5000,
+  });
+  const totalLength = expectedDeliveryLength(job.marker);
+  t.mock.timers.tick(30);
+  pty.emit("data", `${job.marker}_P:sh\n${job.marker}_Q`);
+  let delivered = false;
+  const half = Math.ceil(OSC_3008.length / 2);
+  for (let i = 0; i < 4000; i += 1) {
+    t.mock.timers.tick(30);
+    if (i % 4 === 0) pty.emit("data", OSC_3008.slice(0, half));
+    if (i % 4 === 1) pty.emit("data", OSC_3008.slice(half));
+    if (writes.join("").length >= totalLength) { delivered = true; break; }
+  }
+  assert.ok(delivered, "wrapper delivery completed");
+  t.mock.timers.tick(60);
+  assert.equal(writes[writes.length - 1], "\n", "a split OSC 3008 sequence still latches the flag");
   pty.emit("data", `${job.marker}_S\nout\n${job.marker}_E:0\n`);
   assert.equal((await job.resultPromise).exitCode, 0);
   pty.emit("close");

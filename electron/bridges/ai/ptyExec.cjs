@@ -558,8 +558,15 @@ function startPtyJob(ptyStream, command, options) {
     // OSC 3008 gates this — common decorative sequences (e.g. OSC 0 terminal
     // titles echoed by Ubuntu's default PS1) have always coexisted with
     // typed delivery and must not trigger the extra submit Enter below.
-    if (deliveringInput && text.includes("\x1b]3008;")) {
-      inputDeliverySawOsc3008 = true;
+    // PTY data callbacks may split the escape sequence at any byte, so search
+    // the retained suffix of the previous chunk together with this chunk;
+    // `osc3008Tail` is reset at the start of every input delivery.
+    if (deliveringInput) {
+      const osc3008Needle = "\x1b]3008;";
+      if (!inputDeliverySawOsc3008 && (osc3008Tail + text).includes(osc3008Needle)) {
+        inputDeliverySawOsc3008 = true;
+      }
+      osc3008Tail = text.slice(-(osc3008Needle.length - 1));
     }
 
     if (probingShell) {
@@ -770,6 +777,9 @@ function startPtyJob(ptyStream, command, options) {
   // Whether OSC 3008 context reporting landed in the PTY while the current
   // input delivery was still being typed (see the PS0/OSC 3008 note in onData).
   let inputDeliverySawOsc3008 = false;
+  // Retained suffix of the last decoded PTY chunk, so an escape sequence split
+  // across two data callbacks is still detected during typed delivery.
+  let osc3008Tail = "";
   function stopInputWrite() {
     inputWriteGeneration += 1;
     clearTimeout(inputWriteTimer);
@@ -797,6 +807,7 @@ function startPtyJob(ptyStream, command, options) {
     clearTimeout(timeoutId);
     deliveringInput = true;
     inputDeliverySawOsc3008 = false;
+    osc3008Tail = "";
     const generation = inputWriteGeneration;
 
     // Keep each write to one Unicode code point for strict bastions, while
@@ -846,6 +857,14 @@ function startPtyJob(ptyStream, command, options) {
           inputWriteTimer = setTimeout(() => {
             if (!isCurrent()) return;
             inputWriteTimer = null;
+            // The start marker can arrive during this delay and proves the
+            // wrapper's own final newline already committed the payload; an
+            // extra Enter then would be consumed by the command's stdin, so
+            // finish delivery without it.
+            if (foundStart) {
+              completeInputDelivery(generation);
+              return;
+            }
             try {
               ptyStream.write("\n");
             } catch (error) {
