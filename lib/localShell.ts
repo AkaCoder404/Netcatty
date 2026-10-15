@@ -21,12 +21,6 @@ function getExecutableBaseName(filePath: string | undefined) {
   return (parts[parts.length - 1] || "").toLowerCase();
 }
 
-/** Explicit WSL launcher or discovered distro ID; never infer from an OS icon. */
-export function isWslLocalShell(shellPath: string | undefined): boolean {
-  const shellName = getExecutableBaseName(shellPath);
-  return WSL_SHELLS.has(shellName) || shellName.startsWith("wsl-");
-}
-
 /**
  * Recover the executable basename from a disambiguated Unix discovery ID.
  *

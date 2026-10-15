@@ -1,4 +1,5 @@
 const commandInjectionReadyReaders = new Map<string, () => boolean>();
+
 export function registerTerminalCommandInjectionReadyReader(
   sessionId: string,
   reader: () => boolean,
