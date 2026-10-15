@@ -1,3 +1,4 @@
+import type { ChatMessageAttachment } from '../infrastructure/ai/types';
 import type { ProviderContinuation } from '../infrastructure/ai/providerContinuation';
 
 /**
@@ -33,6 +34,8 @@ export type ForkMessageLike = {
   content: string;
   thinking?: string;
   providerContinuation?: ProviderContinuation;
+  attachments?: ReadonlyArray<ChatMessageAttachment>;
+  images?: ReadonlyArray<ChatMessageAttachment>;
   toolCalls?: ReadonlyArray<{ id: string; name?: string; arguments?: Record<string, unknown> }>;
   toolResults?: ReadonlyArray<{ toolCallId: string; content?: string; isError?: boolean }>;
   errorInfo?: unknown;
@@ -161,10 +164,18 @@ function stripSourceOutputHandles(value: string): string {
     .replace(/\btool-output-[A-Za-z0-9-]+/g, '[saved output remains in the original chat]');
 }
 
+function stripAttachmentPreview<A extends { previewText?: string }>(attachment: A): A {
+  return attachment.previewText
+    ? { ...attachment, previewText: stripSourceOutputHandles(attachment.previewText) }
+    : attachment;
+}
+
 export function stripMessageContinuationState<M extends ForkMessageLike>(message: M): M {
   const next = {
     ...message,
     content: stripSourceOutputHandles(message.content),
+    ...(message.attachments ? { attachments: message.attachments.map(stripAttachmentPreview) } : {}),
+    ...(message.images ? { images: message.images.map(stripAttachmentPreview) } : {}),
     ...(message.thinking ? { thinking: stripSourceOutputHandles(message.thinking) } : {}),
     ...(message.toolCalls ? {
       toolCalls: message.toolCalls.map(call => {

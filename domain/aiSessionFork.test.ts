@@ -293,3 +293,26 @@ test('fork removes bare output identifiers in transcript previews while preservi
   assert.match(parsed.preview, /Read/);
   assert.match(assistant.content, /tool-output-source/);
 });
+
+test('fork sanitizes attachment previews without changing attachment data or identity', () => {
+  const attachment = { base64Data: 'SEVMTE8=', mediaType: 'text/plain', filename: 'terminal-selection.log', terminalSelection: true, lineCount: 3, filePath: '/original/selection.log', previewText: 'Read tool-output-selection with tool_output_read' };
+  const image = { base64Data: 'UE5H', mediaType: 'image/png', filename: 'original.png' };
+  const user = msg({ role: 'user', content: 'Inspect', attachments: [attachment, image], images: [attachment] });
+  const assistant = msg({ content: 'done' });
+  const plan = planSessionFork(session([user, assistant]), assistant.id);
+  assert.ok(plan.ok);
+  assert.doesNotMatch(plan.messages[0].attachments![0].previewText!, /tool-output-selection/);
+  assert.deepEqual({ ...plan.messages[0].attachments![0], previewText: attachment.previewText }, attachment);
+  assert.equal(plan.messages[0].attachments![1], image);
+  assert.doesNotMatch(plan.messages[0].images![0].previewText!, /tool-output-selection/);
+  assert.equal(user.attachments![0], attachment);
+  assert.equal(attachment.previewText, 'Read tool-output-selection with tool_output_read');
+});
+
+test('fork still rejects an unresolved retained call even when compaction covers it', () => {
+  const unresolved = msg({ toolCalls: [{ id: 'pending' }], executionStatus: 'cancelled' });
+  const done = msg({ content: 'later completed answer' });
+  const source = session([unresolved, done], { summary: 'the earlier call was interrupted', compactedMessageCount: 1 });
+  assert.deepEqual(planSessionFork(source, done.id), { ok: false, reason: 'dangling-tool-call' });
+  assert.equal(getForkableMessageIds(source).has(done.id), false);
+});
