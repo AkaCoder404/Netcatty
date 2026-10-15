@@ -1165,6 +1165,44 @@ for (const adoption of ["sync", "reconcile"] as const) {
   });
 }
 
+for (const adoption of ["sync", "reconcile"] as const) {
+  for (const rejects of [false, true]) {
+    test(`${adoption} preserves exhaustion if backend adoption ${rejects ? "rejects" : "finds a stopped tunnel"}`, async (t) => {
+      const reconnectRule = rule({ id: `failed-adoption-${adoption}-${rejects}`, autoStart: true });
+      let statusListener: ((status: PortForwardingRule["status"]) => void) | undefined;
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        value: { netcatty: {
+          startPortForward: async () => ({ success: true }),
+          listPortForwards: async () => [{ ruleId: reconnectRule.id, tunnelId: "stopped-before-subscribe", status: "active" }],
+          subscribePortForward: async () => {
+            if (rejects) throw new Error("backend unavailable during adoption");
+            return { tunnelId: "stopped-before-subscribe", status: "inactive" };
+          },
+          stopPortForwardByRuleId: async () => ({ stopped: 1, failed: 0, errors: [] }),
+          onPortForwardStatus: (_id: string, listener: typeof statusListener) => {
+            statusListener = listener;
+            return () => undefined;
+          },
+        } },
+      });
+      setReconnectCallback(async () => ({ success: true }), () => true);
+      t.after(async () => {
+        setReconnectCallback(null);
+        await stopAndCleanupRuleAndWait(reconnectRule.id);
+      });
+      await startPortForward(reconnectRule, host(), [], [], [], () => undefined, true);
+      getActiveConnection(reconnectRule.id)!.reconnectAttempts = 5;
+      statusListener!("error");
+      statusListener!("inactive");
+      assert.equal(resetReconnectAttempts(reconnectRule.id), true);
+      if (adoption === "sync") await syncWithBackend({ shouldReconnect: () => true });
+      else await reconcileWithBackend();
+      assert.equal(resetReconnectAttempts(reconnectRule.id), true);
+    });
+  }
+}
+
 test("inactive close events preserve an already scheduled reconnect", async (t) => {
   let statusListener: ((status: PortForwardingRule["status"], error?: string | null) => void) | undefined;
   Object.defineProperty(globalThis, "window", {
