@@ -548,6 +548,20 @@ function startPtyJob(ptyStream, command, options) {
     if (!text) return;
     if (!pendingEnd && !deliveringInput) armOutputTimeout();
 
+    // Interactive shells can emit bypass escape-sequence output while typed
+    // input is still being delivered: PS0 / PROMPT_COMMAND hooks such as
+    // systemd ≥258's "Hierarchical Context Signalling" (Ubuntu 25.10/26.04
+    // ships /etc/profile.d/80-systemd-osc-context.sh) print OSC 3008 between
+    // command submission and execution (issue #3676). If the payload's own
+    // trailing newline ends up desynced against that bypass output, the
+    // command sits on the input line without ever being committed. Only
+    // OSC 3008 gates this — common decorative sequences (e.g. OSC 0 terminal
+    // titles echoed by Ubuntu's default PS1) have always coexisted with
+    // typed delivery and must not trigger the extra submit Enter below.
+    if (deliveringInput && text.includes("\x1b]3008;")) {
+      inputDeliverySawOsc3008 = true;
+    }
+
     if (probingShell) {
       probeOutput = (probeOutput + text).slice(-16384);
       if (cancelRequested && hasExpectedPromptSuffix(probeOutput, expectedPrompt)) {
@@ -753,6 +767,9 @@ function startPtyJob(ptyStream, command, options) {
   let inputWriteTimer = null;
   let inputDrainListener = null;
   let inputWriteGeneration = 0;
+  // Whether OSC 3008 context reporting landed in the PTY while the current
+  // input delivery was still being typed (see the PS0/OSC 3008 note in onData).
+  let inputDeliverySawOsc3008 = false;
   function stopInputWrite() {
     inputWriteGeneration += 1;
     clearTimeout(inputWriteTimer);
@@ -779,6 +796,7 @@ function startPtyJob(ptyStream, command, options) {
     clearStartupTimeout();
     clearTimeout(timeoutId);
     deliveringInput = true;
+    inputDeliverySawOsc3008 = false;
     const generation = inputWriteGeneration;
 
     // Keep each write to one Unicode code point for strict bastions, while
@@ -816,6 +834,27 @@ function startPtyJob(ptyStream, command, options) {
           }
         }
         if (offset < text.length) scheduleNext();
+        else if (inputDeliverySawOsc3008) {
+          // Bypass OSC 3008 output (PS0 / systemd context reporting, issue
+          // #3676) landed while this payload was being typed, so its own
+          // trailing newline may have been desynced and left the shell holding
+          // the line uncommitted. Send one standalone Enter — as its own
+          // write, kept out of the paced payload batch — so the typed command
+          // is always submitted. On shells that already committed the payload
+          // it just waits in the tty queue and prints one extra empty prompt
+          // afterwards.
+          inputWriteTimer = setTimeout(() => {
+            if (!isCurrent()) return;
+            inputWriteTimer = null;
+            try {
+              ptyStream.write("\n");
+            } catch (error) {
+              finish(preStartOutput, -1, `Terminal input failed: ${error.message}`);
+              return;
+            }
+            completeInputDelivery(generation);
+          }, 30);
+        }
         else completeInputDelivery(generation);
       } catch (error) {
         finish(preStartOutput, -1, `Terminal input failed: ${error.message}`);
