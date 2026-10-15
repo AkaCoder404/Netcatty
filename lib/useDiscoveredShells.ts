@@ -216,7 +216,7 @@ export function isMonochromeShellIcon(iconId: string): boolean {
  * boundary can resolve saved local hosts saved with "System default shell".
  */
 export function useDefaultLocalShellContext(
-  terminalSettings?: { localShell?: string; localShellArgs?: string[] },
+  terminalSettings?: { localShell?: string; localShellArgs?: string[]; localStartDir?: string },
 ): ResolveDefaultLocalShellContext {
   const discoveredShells = useDiscoveredShells();
   return useMemo(

@@ -160,6 +160,9 @@ export const createHostTerminalSession = (
       localShellArgs: host.localShellArgs ?? EMPTY_LOCAL_SHELL_ARGS,
       localShellName: host.localShellName,
       localShellIcon: host.localShellIcon,
+      // Effective directory from resolveHostDefaultLocalShell, including a
+      // Settings directory the saved host inherits. Copy Tab overlays this
+      // snapshot, so a later settings or vault edit cannot move the relaunch.
       localStartDir: host.localStartDir,
     } : {}),
     ...(host.ephemeral ? { ephemeralHost: true } : {}),

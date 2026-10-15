@@ -70,7 +70,7 @@ export const getVaultHostRowSubtitle = (
 
 export interface ResolveDefaultLocalShellContext {
   discoveredShells?: DiscoveredShell[];
-  terminalSettings?: { localShell?: string; localShellArgs?: string[] };
+  terminalSettings?: { localShell?: string; localShellArgs?: string[]; localStartDir?: string };
   resolveShellSetting?: (
     localShell: string,
     discoveredShells: DiscoveredShell[],
@@ -79,28 +79,51 @@ export interface ResolveDefaultLocalShellContext {
 }
 
 /**
- * Saved local-shell hosts created with "System default shell" carry no
- * `localShell`. Resolve the Settings → Terminal shell for them so every save
- * path that materializes effective hosts (host connect, tray/dock open,
- * workspace creation/append, ...) launches the configured shell instead of
- * silently falling back to the backend OS default. A no-op for non-local
- * hosts and for hosts that already specify a shell.
+ * Directory `startLocal` will actually use: the host's own directory, or the
+ * Settings → Terminal directory when the host leaves it blank. Same `||`
+ * precedence as the starter, so the session snapshot matches the launch.
+ */
+const inheritLocalStartDir = (
+  host: Host,
+  ctx: ResolveDefaultLocalShellContext,
+): Host => {
+  if (host.localStartDir) return host;
+  const inherited = ctx.terminalSettings?.localStartDir;
+  if (!inherited) return host;
+  return { ...host, localStartDir: inherited };
+};
+
+/**
+ * Materialize the local shell and start directory a saved local host launches
+ * with.
+ *
+ * Hosts saved as "System default shell" carry no `localShell`. Resolve the
+ * Settings → Terminal shell so connect, tray/dock, workspace, and snippet
+ * paths launch that shell instead of the backend OS default. Hosts that
+ * already specify a shell keep it.
+ *
+ * A blank `localStartDir` inherits the Settings directory on the same pass.
+ * Session creation copies that value, so Copy Tab keeps the directory that
+ * launched even if Settings or the Vault host change later. Non-local hosts
+ * are unchanged.
  */
 export const resolveHostDefaultLocalShell = (
   host: Host,
   ctx: ResolveDefaultLocalShellContext,
 ): Host => {
-  if (host.protocol !== 'local' || host.localShell) return host;
+  if (host.protocol !== 'local') return host;
+  const withStartDir = inheritLocalStartDir(host, ctx);
+  if (withStartDir.localShell) return withStartDir;
   const configuredShell = ctx.terminalSettings?.localShell ?? '';
   const resolved = ctx.resolveShellSetting?.(
     configuredShell,
     ctx.discoveredShells ?? [],
     ctx.terminalSettings?.localShellArgs,
   );
-  if (!resolved?.command) return host;
+  if (!resolved?.command) return withStartDir;
   const matchedShell = ctx.discoveredShells?.find((s) => s.id === configuredShell);
   return {
-    ...host,
+    ...withStartDir,
     localShell: resolved.command,
     localShellArgs: resolved.args,
     localShellName: matchedShell?.name,

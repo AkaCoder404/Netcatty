@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createHostTerminalSession } from "./sessionFactories.ts";
 import { createLocalTerminalSession } from "./sessionFactories.ts";
+import { resolveHostDefaultLocalShell } from "../../domain/localShellHost";
 import { resolveTerminalSessionHost } from "../../domain/terminalHostResolution";
 import type { Host } from "../../domain/models";
 
@@ -158,4 +159,73 @@ test("resolveTerminalSessionHost does not merge edited host args into a no-args 
   assert.equal(resolved.localShell, "cmd");
   assert.deepEqual(resolved.localShellArgs, []);
   assert.equal(resolved.localShellName, "Command Prompt");
+});
+
+test("createHostTerminalSession snapshots an inherited start directory for Copy Tab", () => {
+  // The saved host has no directory of its own, so the starter launches in
+  // Settings > Terminal's localStartDir. That effective directory has to be
+  // recorded now; overlay falls back to the host or the current setting when
+  // the session field is missing.
+  const saved = localVaultHost({
+    localShell: "bash",
+    localShellName: "Bash",
+    localStartDir: "",
+  });
+  const effective = resolveHostDefaultLocalShell(saved, {
+    terminalSettings: { localStartDir: "/home/alice/global" },
+  });
+  const session = createHostTerminalSession("session-inherit", effective);
+  assert.equal(session.localStartDir, "/home/alice/global");
+
+  const changedSettings = {
+    terminalSettings: { localShell: "fish", localStartDir: "/home/alice/changed" },
+  };
+  const afterSettingsChange = resolveTerminalSessionHost({
+    session,
+    hosts: [saved],
+    groupConfigs: [],
+    proxyProfiles: [],
+    localOs: "linux",
+    defaultLocalShell: changedSettings,
+  });
+  assert.equal(afterSettingsChange.localStartDir, "/home/alice/global");
+
+  const afterHostEdit = resolveTerminalSessionHost({
+    session,
+    hosts: [{ ...saved, localStartDir: "/home/alice/edited" }],
+    groupConfigs: [],
+    proxyProfiles: [],
+    localOs: "linux",
+    defaultLocalShell: changedSettings,
+  });
+  assert.equal(afterHostEdit.localStartDir, "/home/alice/global");
+});
+
+test("createHostTerminalSession snapshots an inherited start directory for a default shell host", () => {
+  const saved = localVaultHost();
+  const effective = resolveHostDefaultLocalShell(saved, {
+    terminalSettings: { localShell: "bash", localStartDir: "/home/alice/global" },
+    resolveShellSetting: () => ({ command: "/bin/bash", args: ["-l"] }),
+  });
+  const session = createHostTerminalSession("session-default-shell", effective);
+
+  assert.equal(session.localShell, "/bin/bash");
+  assert.deepEqual(session.localShellArgs, ["-l"]);
+  assert.equal(session.localStartDir, "/home/alice/global");
+});
+
+test("resolveHostDefaultLocalShell keeps an explicit start directory and ignores non-local hosts", () => {
+  const explicit = localVaultHost({ localShell: "bash", localStartDir: "/work" });
+  const resolvedExplicit = resolveHostDefaultLocalShell(explicit, {
+    terminalSettings: { localStartDir: "/home/alice/global" },
+  });
+  assert.equal(resolvedExplicit.localStartDir, "/work");
+  assert.equal(createHostTerminalSession("session-explicit", resolvedExplicit).localStartDir, "/work");
+
+  const ssh = localVaultHost({ protocol: "ssh", hostname: "example.com", port: 22 });
+  const resolvedSsh = resolveHostDefaultLocalShell(ssh, {
+    terminalSettings: { localStartDir: "/home/alice/global" },
+  });
+  assert.equal(resolvedSsh.localStartDir, undefined);
+  assert.equal(resolvedSsh, ssh);
 });
