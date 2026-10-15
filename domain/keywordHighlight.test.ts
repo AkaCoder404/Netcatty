@@ -171,3 +171,15 @@ test("Unix path rule upgrades old settings while preserving disabled highlights 
   const restored = normalizeTerminalSettings({ keywordHighlightRules: [...legacy, edited] });
   assert.deepEqual(getRule(restored.keywordHighlightRules, "unix-path"), edited);
 });
+
+test("Unix path highlighting keeps Unicode paths and quoted spaces together", () => {
+  const rule = getRule(DEFAULT_KEYWORD_HIGHLIGHT_RULES, "unix-path");
+  for (const [text, path] of [
+    ["/home/用户/file", "/home/用户/file"],
+    ['cat "/Users/me/My Projects/app"', "/Users/me/My Projects/app"],
+    ["cat '/home/用户/My Projects/app'", "/home/用户/My Projects/app"],
+  ]) {
+    const matches = [...text.matchAll(new RegExp(rule.patterns[0], "gi"))];
+    assert.deepEqual(matches.map((match) => match[0]), [path]);
+  }
+});
