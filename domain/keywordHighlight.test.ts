@@ -156,7 +156,7 @@ test("Unix path highlighting covers terminal paths without matching relative pro
     const matches = [...`'${path}'`.matchAll(new RegExp(rule.patterns[0], "gi"))];
     assert.deepEqual(matches.map((match) => match[0]), [path]);
   }
-  for (const text of ["RELATED,ESTABLISHED", "TCP/IP", "https://example.com/log", " / "]) {
+  for (const text of ["RELATED,ESTABLISHED", "TCP/IP", "https://example.com/log", " / ", "./foo", "../foo", "../../foo"]) {
     assert.equal(matchesAny(rule.patterns, text), false, text);
   }
 });
