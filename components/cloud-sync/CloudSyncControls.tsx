@@ -452,7 +452,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                     void Promise.resolve()
                         .then(() => onDisconnect())
                         .then(() => {
-                            toast.info(t('cloudSync.provider.disconnect.cloudRemains'), {
+                            toast.info(t('cloudSync.provider.disconnect.cloudRemains', { name }), {
                                 title: t('cloudSync.provider.disconnect.toastTitle'),
                                 duration: 8000,
                             });
