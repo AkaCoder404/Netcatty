@@ -725,6 +725,10 @@ export const syncWithBackend = async (
             };
         connection.status = resolveBackendStatus(tunnel.status);
         connection.error = tunnel.error;
+        if (connection.status === 'active') {
+          exhaustedReconnectRules.delete(ruleId);
+          connection.reconnectAttempts = 0;
+        }
         configureSyncedConnection(connection, ruleId);
         activeConnections.set(ruleId, connection);
 
@@ -781,6 +785,11 @@ export const reconcileWithBackend = async (): Promise<{
       const ruleId = resolveBackendRuleId(tunnel);
       if (ruleId) {
         backendRuleIds.add(ruleId);
+        if (tunnel.status === 'active') {
+          exhaustedReconnectRules.delete(ruleId);
+          const existing = activeConnections.get(ruleId);
+          if (existing) existing.reconnectAttempts = 0;
+        }
 
         // Case 2: backend has it, renderer doesn't — insert it
         if (!activeConnections.has(ruleId)) {
