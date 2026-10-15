@@ -2497,7 +2497,7 @@ for (const exitCode of [0, 7]) {
     await waitForExitDeliveries();
     const exits = getExitPayloads(sender);
     assert.equal(exits.length, 1);
-    assert.equal(exits[0].reason, "closed");
+    assert.equal(exits[0].reason, "exited");
     assert.equal(exits[0].exitCode, exitCode);
     assert.equal(exits[0].remoteClosedWithoutExitStatus, undefined);
   });

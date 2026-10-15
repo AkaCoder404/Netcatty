@@ -2669,14 +2669,14 @@ function createStartSessionApi(ctx) {
               } else {
                 // Preserve a shell status already received before transport
                 // close; otherwise do not invent a successful exit code.
-                safeSendSessionExit({ safeSend, electronModule, sessions }, contents, sessionId, {
+                const shellExited = typeof session?._remoteExitCode === "number";
+                safeSendSessionExit({ safeSend, electronModule, sessions }, contents, sessionId, buildRemoteShellExitPayload({
                   sessionId,
-                  reason: "closed",
-                  ...(typeof session?._remoteExitCode === "number"
-                    ? { exitCode: session._remoteExitCode }
-                    : { remoteClosedWithoutExitStatus: true }),
-                  _terminalSessionGeneration: session?._terminalSessionGeneration,
-                });
+                  generation: session?._terminalSessionGeneration,
+                  exitCode: session?._remoteExitCode,
+                  shellExited,
+                  idleTimedOut: shellExited && looksLikeIdleAutoLogout(session?._promptTrackTail),
+                }));
               }
               // Use this connection's captured token so a late close from an
               // old transport can't stop a newer same-sessionId stream (#916).
