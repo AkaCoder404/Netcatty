@@ -1,8 +1,8 @@
-const commandSubmissionListeners = new Map<string, () => void>();
+const commandSubmissionListeners = new Map<string, (data: string) => void>();
 
 export function registerTerminalCommandSubmissionListener(
   sessionId: string,
-  listener: () => void,
+  listener: (data: string) => void,
 ): () => void {
   commandSubmissionListeners.set(sessionId, listener);
   return () => {
@@ -14,6 +14,6 @@ export function registerTerminalCommandSubmissionListener(
 
 /** Invalidate command-relative UI before typed or programmatic input is sent. */
 export function notifyTerminalCommandSubmission(sessionId: string, data: string): void {
-  if (/[\r\n]/u.test(data)) commandSubmissionListeners.get(sessionId)?.();
+  if (/[\r\n]/u.test(data)) commandSubmissionListeners.get(sessionId)?.(data);
 }
 

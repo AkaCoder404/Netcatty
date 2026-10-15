@@ -1443,7 +1443,7 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
     if (id) {
       // Win32/Kitty wire records can encode Enter without a CR/LF byte.
       // Reuse their existing logical input; key-up records have no semantics.
-      if (options?.logicalData != null) {
+      if (options?.logicalData != null && !/[\r\n]/u.test(dataToWrite)) {
         notifyTerminalCommandSubmission(id, logicalData ?? "");
       }
       prioritizeTerminalInput(

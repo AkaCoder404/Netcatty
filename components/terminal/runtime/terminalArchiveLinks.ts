@@ -15,8 +15,22 @@ export function registerTerminalArchiveLinks(options: {
   // Relative names belong only to output from the latest submitted command.
   // A marker follows scrollback trimming without keeping a cwd history.
   let commandStart = term.registerMarker(0);
-  const disposeSubmission = registerTerminalCommandSubmissionListener(options.sessionId, () => {
+  let awaitingMultilineSubmit = false;
+  const disposeSubmission = registerTerminalCommandSubmissionListener(options.sessionId, data => {
     commandStart?.dispose();
+    commandStart = undefined;
+    const normalized = data.replace(/\r\n/gu, "\n");
+    // A batch can print a name and then change directory. Do not guess which
+    // line produced it; wait for a later, separate single-line submission.
+    if (/[\r\n]/u.test(normalized.replace(/[\r\n]$/u, ""))) {
+      awaitingMultilineSubmit = !/[\r\n]$/u.test(normalized);
+      return;
+    }
+    // Bracketed / paste-only multiline input runs on its following Enter.
+    if (awaitingMultilineSubmit) {
+      awaitingMultilineSubmit = false;
+      return;
+    }
     commandStart = term.registerMarker(0);
   });
   const hasRelativeContext = (y: number) => commandStart !== undefined

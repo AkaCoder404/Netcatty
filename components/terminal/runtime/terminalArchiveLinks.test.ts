@@ -19,7 +19,7 @@ function fixture() {
   };
   const registration = registerTerminalArchiveLinks({ term: term as unknown as Terminal, sessionId: 'archive-test', isEnabled: () => enabled, isInputReady: () => ready });
   const links = () => { let value: ILink[] | undefined; provider.provideLinks(1, result => { value = result; }); return value; };
-  return { links, pasted, registration, submit: () => { markerLine = 0; notifyTerminalCommandSubmission('archive-test', '\r'); }, setText: (value: string) => { text = value; }, setReady: (value: boolean) => { ready = value; }, setEnabled: (value: boolean) => { enabled = value; }, setWrapped: () => { wrapped = true; }, isDisposed: () => registrationDisposed };
+  return { links, pasted, registration, submit: (data = '\r', line = 0) => { markerLine = line; notifyTerminalCommandSubmission('archive-test', data); }, setText: (value: string) => { text = value; }, setReady: (value: boolean) => { ready = value; }, setEnabled: (value: boolean) => { enabled = value; }, setWrapped: () => { wrapped = true; }, isDisposed: () => registrationDisposed };
 }
 
 const ctrlClick = { button: 0, ctrlKey: true } as MouseEvent;
@@ -63,4 +63,39 @@ test('submitting another command invalidates old relative names and cached links
   const absolute = f.links()![0];
   absolute.activate(ctrlClick, absolute.text);
   assert.deepEqual(f.pasted, ["tar -xzf '/tmp/backup.tar.gz'"]);
+});
+
+
+test('a multi-line auto-run batch suppresses relative output until a separate single-line command', () => {
+  const f = fixture();
+  f.submit('ls\ncd /other\r', -1);
+  assert.deepEqual(f.links(), []);
+  f.setText('/tmp/backup.tar.gz');
+  assert.equal(f.links()?.length, 1);
+  f.setText('backup.tar.gz');
+  f.submit('ls\r', -1);
+  assert.equal(f.links()?.length, 1);
+  f.registration.dispose();
+});
+
+test('multiline paste stays suppressed through its submit Enter, then fresh single-line output recovers', () => {
+  for (const data of ['ls\ncd /other', '\x1b[200~ls\ncd /other\x1b[201~']) {
+    const f = fixture();
+    f.submit(data, -1);
+    assert.deepEqual(f.links(), []);
+    f.submit('\r', -1);
+    assert.deepEqual(f.links(), []);
+    f.submit('ls\r', -1);
+    assert.equal(f.links()?.length, 1);
+    f.registration.dispose();
+  }
+});
+
+test('a single CRLF terminator is one command, while a multi-line CRLF batch is conservative', () => {
+  const f = fixture();
+  f.submit('ls\r\n', -1);
+  assert.equal(f.links()?.length, 1);
+  f.submit('ls\r\ncd /other\r\n', -1);
+  assert.deepEqual(f.links(), []);
+  f.registration.dispose();
 });
