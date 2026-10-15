@@ -4,7 +4,10 @@ export type TerminalSessionExitEvent = {
   exitCode?: number;
   signal?: number;
   error?: string;
-  reason?: "exited" | "error" | "timeout" | "closed";
+  reason?: "exited" | "error" | "timeout" | "closed" | "signaled";
+  // ssh2 exit-signal name ("SIGHUP", "SIGTERM", ...). Set when the server
+  // terminated the session process. Distinct from a transport "closed".
+  exitSignal?: string;
   // True when the remote closed the channel without sending exit-status or
   // exit-signal (#3591): no numeric exit code exists, and the renderer shows
   // a distinct message instead of a misleading "code 0".
@@ -16,12 +19,10 @@ export function formatSessionClosedExitMessage(evt: TerminalSessionExitEvent): s
   if (evt?.remoteClosedWithoutExitStatus) {
     return "\r\n[session closed by remote (no exit status)]";
   }
-  // reason "error" is an abnormal teardown on our side (transport failure,
-  // terminal worker exit) (#3631): the error text is surfaced separately as
-  // the session error, and any exit code carried along belongs to that
-  // infrastructure failure — printing it would read like a clean remote exit
-  // ("session closed (code 0)"), exactly the misreport #3591 removed for
-  // peer-initiated channel closes.
+  if (evt?.reason === "signaled" || (typeof evt?.exitSignal === "string" && evt.exitSignal.trim().length > 0)) {
+    return "\r\n[session closed by remote signal]";
+  }
+  // Infrastructure exit codes do not describe the remote shell's status.
   if (evt?.reason === "error") {
     return "\r\n[session closed unexpectedly]";
   }
@@ -43,7 +44,11 @@ function isConfirmedCleanExit(evt: TerminalSessionExitEvent): boolean {
 
 export function resolveTerminalSessionExitIntent(
   evt: TerminalSessionExitEvent,
-  autoCloseOnExit = true,
+  // Keep-tab is the safe default: a caller that has not loaded the terminal
+  // setting yet must not silently delete a session tab. Remote graceful
+  // channel closes (e.g. a jump host reaping an idle session) are reported
+  // as a clean exit, so an unavailable setting must not re-enable closing.
+  autoCloseOnExit = false,
 ): TerminalSessionExitIntent {
   if (autoCloseOnExit && isConfirmedCleanExit(evt)) {
     return { kind: "closeSession" };
