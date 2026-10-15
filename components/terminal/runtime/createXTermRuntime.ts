@@ -11,6 +11,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { supportsTerminalArchiveCommands } from "../../../domain/terminalArchives";
 import { registerTerminalArchiveLinks } from "./terminalArchiveLinks";
 import { isTerminalReadyForCommandInjection } from "./terminalCommandInjectionReadyRegistry";
+import { notifyTerminalCommandSubmission } from "../../../application/state/terminalCommandSubmissionRegistry";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal as XTerm } from "@xterm/xterm";
 import type { RefObject } from "react";
@@ -1440,6 +1441,11 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
     if (handledSubmittedInput) lastInputWasPrintable = true;
 
     if (id) {
+      // Win32/Kitty wire records can encode Enter without a CR/LF byte.
+      // Reuse their existing logical input; key-up records have no semantics.
+      if (options?.logicalData != null) {
+        notifyTerminalCommandSubmission(id, logicalData ?? "");
+      }
       prioritizeTerminalInput(
         term,
         id,
