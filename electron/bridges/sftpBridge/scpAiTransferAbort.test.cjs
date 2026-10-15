@@ -582,16 +582,11 @@ describe("AI/MCP SCP transfer abort on shipped download/upload entry points", ()
     await fs.promises.writeFile(localPath, original, { mode: 0o600 });
     await fs.promises.chmod(localPath, 0o600);
 
-    const originalChmod = fs.promises.chmod;
-    fs.promises.chmod = async (filePath, mode) => {
-      if (String(filePath).includes(".netcatty-") && String(filePath).endsWith(".ready")) {
-        const error = new Error("injected chmod failure");
-        error.code = "EPERM";
-        throw error;
-      }
-      return originalChmod(filePath, mode);
-    };
-    t.after(() => { fs.promises.chmod = originalChmod; });
+    interceptPreparedChmod(t, async () => {
+      const error = new Error("injected chmod failure");
+      error.code = "EPERM";
+      throw error;
+    });
 
     await assert.rejects(
       () => sftpBridge.downloadSftpToLocal(null, {
@@ -630,18 +625,14 @@ describe("AI/MCP SCP transfer abort on shipped download/upload entry points", ()
     const original = Buffer.from("original-before-late-change");
     await fs.promises.writeFile(localPath, original, { mode: 0o600 });
 
-    const originalChmod = fs.promises.chmod;
     let releaseChmod;
     let markChmodStarted;
     const chmodStarted = new Promise((resolve) => { markChmodStarted = resolve; });
-    fs.promises.chmod = async (filePath, mode) => {
-      if (String(filePath).includes(".netcatty-") && String(filePath).endsWith(".ready")) {
-        markChmodStarted();
-        await new Promise((resolve) => { releaseChmod = resolve; });
-      }
-      return originalChmod(filePath, mode);
-    };
-    t.after(() => { fs.promises.chmod = originalChmod; });
+    interceptPreparedChmod(t, async (chmod, mode) => {
+      markChmodStarted();
+      await new Promise((resolve) => { releaseChmod = resolve; });
+      return chmod(mode);
+    });
 
     const running = sftpBridge.downloadSftpToLocal(null, {
       sftpId: "scp-late-directory",
@@ -685,18 +676,14 @@ describe("AI/MCP SCP transfer abort on shipped download/upload entry points", ()
     await fs.promises.writeFile(localPath, original, { mode: 0o600 });
     await fs.promises.chmod(localPath, 0o600);
 
-    const originalChmod = fs.promises.chmod;
     let releaseChmod;
     let markChmodStarted;
     const chmodStarted = new Promise((resolve) => { markChmodStarted = resolve; });
-    fs.promises.chmod = async (filePath, mode) => {
-      if (String(filePath).includes(".netcatty-") && String(filePath).endsWith(".ready")) {
-        markChmodStarted();
-        await new Promise((resolve) => { releaseChmod = resolve; });
-      }
-      return originalChmod(filePath, mode);
-    };
-    t.after(() => { fs.promises.chmod = originalChmod; });
+    interceptPreparedChmod(t, async (chmod, mode) => {
+      markChmodStarted();
+      await new Promise((resolve) => { releaseChmod = resolve; });
+      return chmod(mode);
+    });
 
     const running = sftpBridge.downloadSftpToLocal(null, {
       sftpId: "scp-same-mode-replacement",
@@ -986,3 +973,17 @@ describe("AI/MCP SCP transfer abort on shipped download/upload entry points", ()
     assert.match(unifiedBlock, /transferBridge\.cancelTransfer/);
   });
 });
+
+
+function interceptPreparedChmod(t, callback) {
+  const originalOpen = fs.promises.open;
+  fs.promises.open = async (filePath, ...args) => {
+    const handle = await originalOpen.call(fs.promises, filePath, ...args);
+    if (String(filePath).includes(".netcatty-") && String(filePath).endsWith(".ready") && args[0] === "r") {
+      const chmod = handle.chmod.bind(handle);
+      handle.chmod = (mode) => callback(chmod, mode);
+    }
+    return handle;
+  };
+  t.after(() => { fs.promises.open = originalOpen; });
+}
