@@ -1077,6 +1077,48 @@ for (const rejects of [false, true]) {
   });
 }
 
+for (const rejects of [false, true]) {
+  test(`final failure notification and ${rejects ? "rejection" : "reply"} cannot restart an exhausted cycle`, async (t) => {
+    let statusListener: ((status: PortForwardingRule["status"], error?: string) => void) | undefined;
+    let forceFinalAttempt = true;
+    const reconnectRule = rule({ id: `final-double-failure-${rejects}`, autoStart: true });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { netcatty: {
+        startPortForward: async () => {
+          if (forceFinalAttempt) getActiveConnection(reconnectRule.id)!.reconnectAttempts = 5;
+          statusListener?.("error", "SSH connection failed");
+          if (rejects) throw new Error("SSH connection failed");
+          return { success: false, error: "SSH connection failed" };
+        },
+        stopPortForwardByRuleId: async () => ({ stopped: 1, failed: 0, errors: [] }),
+        onPortForwardStatus: (_id: string, listener: typeof statusListener) => {
+          statusListener = listener;
+          return () => undefined;
+        },
+      } },
+    });
+    let reconnects = 0;
+    setReconnectCallback(async () => { reconnects += 1; return { success: true }; });
+    t.after(async () => {
+      setReconnectCallback(null);
+      await stopAndCleanupRuleAndWait(reconnectRule.id);
+    });
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    await startPortForward(reconnectRule, host(), [], [], [], () => undefined, true);
+    t.mock.timers.tick(3000);
+    assert.equal(reconnects, 0);
+    assert.equal(resetReconnectAttempts(reconnectRule.id), true);
+
+    // An explicit restart must still get a new retry cycle if it fails.
+    forceFinalAttempt = false;
+    await startPortForward(reconnectRule, host(), [], [], [], () => undefined, true);
+    assert.equal(getActiveConnection(reconnectRule.id)?.reconnectAttempts, 1);
+    t.mock.timers.tick(3000);
+    assert.equal(reconnects, 1);
+  });
+}
+
 test("inactive close events preserve an already scheduled reconnect", async (t) => {
   let statusListener: ((status: PortForwardingRule["status"], error?: string | null) => void) | undefined;
   Object.defineProperty(globalThis, "window", {
