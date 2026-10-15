@@ -592,10 +592,13 @@ test('fork is offered only for safe completed replies and hidden while streaming
     { id: 'done', role: 'assistant', content: 'completed', timestamp: 2, executionStatus: 'completed' },
     { id: 'failed', role: 'assistant', content: 'failed', timestamp: 3, executionStatus: 'failed' },
   ];
-  const render = (isStreaming: boolean) => renderToStaticMarkup(React.createElement(
-    I18nProvider, { locale: 'en' }, React.createElement(TooltipProvider, null,
-      React.createElement(ChatMessageList, { messages, isStreaming, onForkFromMessage: () => {} })),
-  ));
+  const render = (isStreaming: boolean) => renderToStaticMarkup(
+    <I18nProvider locale="en">
+      <TooltipProvider>
+        <ChatMessageList messages={messages} isStreaming={isStreaming} onForkFromMessage={() => {}} />
+      </TooltipProvider>
+    </I18nProvider>,
+  );
   assert.equal((render(false).match(/Fork from here/g) ?? []).length, 1);
   assert.equal((render(true).match(/Fork from here/g) ?? []).length, 0);
 });
