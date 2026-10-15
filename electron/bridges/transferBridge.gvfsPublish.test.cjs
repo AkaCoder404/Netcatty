@@ -32,6 +32,7 @@ async function mountedDestination(t, options = {}) {
       if (name === "copyFile") {
         calls.push("copyFile");
         if (options.readyCollision) fs.writeFileSync(args[1], "other writer");
+        if (options.cancelBeforeFallback) cancelled = true;
         if (options.copyError !== false) throw unsupported(options.copyError || "ENOTSUP");
       }
       if (name === "link") throw unsupported();
@@ -158,5 +159,31 @@ for (const metadataError of ["EPERM", "EACCES"]) {
     assert.equal(fs.readFileSync(path.join(setup.root, backup), "utf8"), "original");
     assert.deepEqual(fs.readFileSync(setup.stage), setup.payload);
     assert.equal(setup.calls.some(call => Array.isArray(call) && call[0] === "commit"), false);
+  });
+}
+
+for (const readyCollision of [false, true]) {
+  test(`cancellation before fallback output remains cancellation, existing ready=${readyCollision}`, async (t) => {
+    const setup = await mountedDestination(t, { cancelBeforeFallback: true, readyCollision });
+    const originalLstat = fs.promises.lstat;
+    const originalUnlink = fs.promises.unlink;
+    t.after(() => { fs.promises.lstat = originalLstat; fs.promises.unlink = originalUnlink; });
+    for (const [name, original] of [["lstat", originalLstat], ["unlink", originalUnlink]]) {
+      fs.promises[name] = async (...args) => {
+        assert.equal(String(args[0]).endsWith(".ready"), false, "no destination probe/cleanup after early cancellation");
+        return original.apply(fs.promises, args);
+      };
+    }
+    await assert.rejects(setup.run, (error) => {
+      assert.equal(error.code, "ABORT_ERR");
+      assert.equal(Boolean(error.recoveryFailed), false);
+      return true;
+    });
+    assert.equal(setup.calls.includes("ready-open"), false);
+    assert.equal(fs.existsSync(setup.target), false);
+    if (readyCollision) {
+      const ready = fs.readdirSync(setup.root).find(name => name.endsWith(".ready"));
+      assert.equal(fs.readFileSync(path.join(setup.root, ready), "utf8"), "other writer");
+    } else assert.deepEqual(fs.readdirSync(setup.root), ["stage.part"]);
   });
 }

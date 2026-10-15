@@ -560,6 +560,54 @@ describe("AI/MCP SCP transfer abort on shipped download/upload entry points", ()
     assert.deepEqual(leftovers, []);
   });
 
+  it("downloadSftpToLocal cancels and clears the stage before fallback creates output", async (t) => {
+    const controller = new AbortController();
+    const payload = Buffer.from("complete-download-before-cancel");
+    const localPath = path.join(tmpDir, "cancel-before-fallback.bin");
+    fs.writeFileSync(localPath, "original");
+    let stagedPath;
+    t.after(() => { if (stagedPath) fs.rmSync(stagedPath, { force: true }); });
+    const events = [];
+    sftpClients.set("scp-pre-fallback-cancel", {
+      __netcattyFileProtocol: "scp",
+      __netcattyScpBackend: {
+        async stat() { return { type: "file", isDirectory: false, size: payload.length }; },
+        async downloadFile(_remotePath, stage) {
+          stagedPath = stage;
+          await fs.promises.writeFile(stage, payload);
+          return { fileSize: payload.length, transferred: payload.length };
+        },
+      },
+    });
+    for (const name of ["rename", "copyFile"]) {
+      const original = fs.promises[name];
+      t.after(() => { fs.promises[name] = original; });
+      fs.promises[name] = async (...args) => {
+        if (args[0] === stagedPath && String(args[1]).endsWith(".ready")) {
+          if (name === "copyFile") controller.abort();
+          throw Object.assign(new Error("injected cross-device copy refusal"), {
+            code: name === "rename" ? "EXDEV" : "ENOTSUP",
+          });
+        }
+        return original.apply(fs.promises, args);
+      };
+    }
+    await assert.rejects(() => sftpBridge.downloadSftpToLocal(null, {
+      sftpId: "scp-pre-fallback-cancel", remotePath: "/remote/file.bin", localPath,
+      abortSignal: controller.signal,
+      onTransferEvent: (channel) => events.push(channel),
+    }), (error) => {
+      assert.match(error.message, /cancel|abort/i);
+      assert.doesNotMatch(error.message, /Recovery files preserved/);
+      return true;
+    });
+    assert.ok(stagedPath);
+    assert.equal(fs.existsSync(stagedPath), false);
+    assert.equal(fs.readFileSync(localPath, "utf8"), "original");
+    assert.ok(events.includes("netcatty:transfer:cancelled"));
+    assert.equal(events.includes("netcatty:transfer:error"), false);
+  });
+
   it("downloadSftpToLocal leaves the original untouched when mode setup fails", {
     skip: process.platform === "win32",
   }, async (t) => {

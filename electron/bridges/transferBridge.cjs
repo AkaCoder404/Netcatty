@@ -1050,6 +1050,7 @@ async function promoteLocalTransfer(stagedPath, targetPath, options = {}) {
   let backedUp = false;
   let committed = false;
   let keepRecoveryFiles = false;
+  let skipReadyCleanup = false;
   let preparedHandle;
   let originalHandle;
   let restoreProbeCreated = false;
@@ -1071,9 +1072,14 @@ async function promoteLocalTransfer(stagedPath, targetPath, options = {}) {
             copyOnly: true, preserveMode: false, requireTimestamps: false,
           });
         } catch (fallbackError) {
-          // The exclusive open may have lost to another writer, or copyFile
-          // may have left a partial. Keep that name and the complete stage.
-          keepRecoveryFiles = true;
+          // Do not remove a name this fallback never owned: copyFile may
+          // have left a partial, or an exclusive open may have lost a race.
+          skipReadyCleanup = true;
+          const cancelledBeforeOutput = !fallbackError.localPublicationIncomplete
+            && (fallbackError.code === "ABORT_ERR" || fallbackError.message === "Transfer cancelled");
+          // An early cancellation needs ordinary stage cleanup, not recovery.
+          // Once output exists, retain the complete stage as before.
+          keepRecoveryFiles = !cancelledBeforeOutput;
           throw fallbackError;
         }
       }
@@ -1208,7 +1214,7 @@ async function promoteLocalTransfer(stagedPath, targetPath, options = {}) {
       if (backedUp) failure.remoteBackupPath = backupPath;
       throw failure;
     }
-    await fs.promises.unlink(readyPath).catch(() => {});
+    if (!skipReadyCleanup) await fs.promises.unlink(readyPath).catch(() => {});
     throw error;
   } finally {
     await preparedHandle?.close().catch(() => {});
