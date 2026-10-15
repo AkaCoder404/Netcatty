@@ -411,10 +411,11 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                             size="sm"
                             variant="ghost"
                             onClick={() => setDisconnectConfirmOpen(true)}
-                            className="text-muted-foreground hover:text-red-500"
+                            className="gap-1 text-muted-foreground hover:text-red-500"
                             aria-label={t('cloudSync.provider.disconnect')}
                         >
                             <CloudOff size={14} />
+                            {t('cloudSync.provider.disconnect')}
                         </Button>
                     </>
                 ) : isConnecting && onCancelConnect ? (
@@ -448,7 +449,17 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                 onOpenChange={setDisconnectConfirmOpen}
                 onConfirm={() => {
                     setDisconnectConfirmOpen(false);
-                    onDisconnect();
+                    void Promise.resolve()
+                        .then(() => onDisconnect())
+                        .then(() => {
+                            toast.info(t('cloudSync.provider.disconnect.cloudRemains'), {
+                                title: t('cloudSync.provider.disconnect.toastTitle'),
+                                duration: 8000,
+                            });
+                        })
+                        .catch(() => {
+                            /* failure is surfaced through the provider status / error UI */
+                        });
                 }}
             />
         </div>
