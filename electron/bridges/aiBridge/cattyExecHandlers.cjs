@@ -4,7 +4,6 @@
 // (based in electron/bridges/). Requiring here keeps the path unambiguous.
 const { emitTerminalSessionData } = require("../emitTerminalSessionData.cjs");
 const { formatSyntheticEcho } = require("../ai/shellUtils.cjs");
-const { posixFlavorForSession } = require("../ai/ptyExecHelpers.cjs");
 const { clearSessionFlowState } = require("../terminalFlowAck.cjs");
 const { remoteDisallowsExecChannelProbe, sessionDisallowsExtraSshChannel, ensureSessionShellKindForExec } = require("../ai/sessionShellKind.cjs");
 
@@ -180,7 +179,6 @@ function registerCattyExecHandlers(ctx) {
             timeoutMs,
             shellKind: session.shellKind,
             loginShellHint: session._loginShellKind,
-            posixFlavor: posixFlavorForSession(session),
             probeLiveShell: true,
             bastionKeystrokes: remoteDisallowsExecChannelProbe(session.remoteSshVersion),
             skipPendingInputClear: session.singleChannelSsh === true,

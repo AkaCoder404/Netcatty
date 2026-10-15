@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { buildLiveShellProbe, parseLiveShellProbe } = require('./liveShellProbe.cjs');
+const { buildLiveShellProbe, buildLiveShellProbeCleanup, parseLiveShellProbe } = require('./liveShellProbe.cjs');
 const { startPtyJob } = require('./ptyExec.cjs');
 
 test('live shell response excludes echoed commands, stale markers and partial lines', () => {
@@ -9,18 +9,11 @@ test('live shell response excludes echoed commands, stale markers and partial li
   assert.equal(parseLiveShellProbe(buildLiveShellProbe(marker), marker), null);
   assert.equal(parseLiveShellProbe(`${marker}_P:fi`, marker), null);
   assert.equal(parseLiveShellProbe('__NCMCP_old___P:fish\n', marker), null);
-  const cases = [
-    [`\r${marker}_P:/usr/bin/fish\r\n${marker}_Q`, { kind: 'fish', shellName: 'fish' }],
-    [`${marker}_P:-zsh\n${marker}_Q`, { kind: 'posix', shellName: 'zsh' }],
-    [`${marker}_P:/bin/zsh\n${marker}_Q`, { kind: 'posix', shellName: 'zsh' }],
-    [`${marker}_P:\n${marker}_Q`, { kind: null, shellName: '' }],
-    [`> ${marker}_P:bash\n> ${marker}_Q`, { kind: 'posix', shellName: 'bash' }],
-    [`> ${marker}_P:fish\n> ${marker}_Q`, { kind: 'fish', shellName: 'fish' }],
-    [`> ${marker}_P:sshd\n> ${marker}_Q`, { kind: null, shellName: 'sshd' }],
-  ];
-  for (const [output, expected] of cases) {
-    assert.deepEqual(parseLiveShellProbe(output, marker), expected);
-  }
+  assert.deepEqual(parseLiveShellProbe(`\r${marker}_P:/usr/bin/fish\r\n${marker}_Q`, marker), { kind: 'fish', shellName: 'fish' });
+  assert.deepEqual(parseLiveShellProbe(`${marker}_P:-zsh\n${marker}_Q`, marker), { kind: 'posix', shellName: 'zsh' });
+  assert.deepEqual(parseLiveShellProbe(`${marker}_P:\n${marker}_Q`, marker), { kind: null, shellName: '' });
+  assert.deepEqual(parseLiveShellProbe(`> ${marker}_P:bash\n> ${marker}_Q`, marker), { kind: 'posix', shellName: 'bash' });
+  assert.deepEqual(parseLiveShellProbe(`> ${marker}_P:fish\n> ${marker}_Q`, marker), { kind: 'fish', shellName: 'fish' });
 });
 
 test('probe waits for complete reply before choosing the first wrapper', async () => {
@@ -267,10 +260,7 @@ for (const [customization, listHistory] of [
       const { buildWrappedCommand } = require('./ptyExecHelpers.cjs');
       const marker = '__NCMCP_HISTORY_PROBE__';
       const input = `HISTFILE=/dev/null; HISTCONTROL=; PS1=; PS2=\n${customization}\n${listHistory} -c\necho user_one\necho user_two\n`
-        // The hardened cleanup only fits the multiline Bash form, which is
-        // typed once the live probe has reported a bash shell (unknown
-        // flavors type the zsh-safe single-line probe first).
-        + buildLiveShellProbe(marker, 'bash')
+        + buildLiveShellProbe(marker) + buildLiveShellProbeCleanup(marker)
         + (executeCommand ? buildWrappedCommand('echo command_ok', 'posix', marker, true) : '')
         + '\nprintf \"\\n\"\n' + listHistory + '\nexit\n';
       const result = spawnSync('/bin/bash', ['--noprofile', '--norc', '-i'], {
@@ -335,11 +325,10 @@ test('real PTY: probe and execution leave only user commands for arrow recall', 
 });
 
 for (const invocationName of ['sh', 'renamed-bash']) {
-  test(`Bash invoked as ${invocationName} cleans probe history via the wrapper cleanup`, () => {
+  test(`Bash invoked as ${invocationName} cleans probe history`, () => {
     const fs = require('node:fs');
     const path = require('node:path');
     const { spawnSync } = require('node:child_process');
-    const { buildWrappedCommand } = require('./ptyExecHelpers.cjs');
     const directory = require('../tempDirBridge.cjs').getTempFilePath('probe-bash');
     fs.mkdirSync(directory, { mode: 0o700 });
     try {
@@ -347,19 +336,12 @@ for (const invocationName of ['sh', 'renamed-bash']) {
       fs.symlinkSync('/bin/bash', shell);
       const marker = '__NCMCP_RENAMED_BASH__';
       const result = spawnSync(shell, ['--noprofile', '--norc', '-i'], {
-        // Production flow for an undetectable bash (unknown flavor): the live
-        // probe types no Bash history cleanup (it must stay zsh-safe), and the
-        // wrapper typed after refinement carries the marker-based cleanup that
-        // removes both the wrapper's and the probe's history lines.
         input: 'HISTFILE=/dev/null; HISTCONTROL=; PS1=; PS2=\nbuiltin history -c\necho preserve_user_history\n'
-          + buildLiveShellProbe(marker)
-          + buildWrappedCommand('echo wrapper_ok', 'posix', marker, true)
-          + '\nprintf "\\n"\ncommand builtin history\nexit\n',
+          + buildLiveShellProbe(marker) + buildLiveShellProbeCleanup(marker) + '\nprintf "\\n"\ncommand builtin history\nexit\n',
         encoding: 'utf8', env: { ...process.env, TERM: 'dumb' }, timeout: 5000,
       });
       assert.equal(result.status, 0, result.stderr);
       assert.ok(result.stdout.includes(`${marker}_Q`), result.stdout);
-      assert.match(result.stdout, /wrapper_ok/);
       const entries = result.stdout.split('\n').filter(line => /^\s*\d+\s/.test(line));
       assert.ok(entries.some(line => line.includes('echo preserve_user_history')), result.stdout);
       assert.ok(entries.every(line => !line.includes(marker)), result.stdout);
@@ -407,7 +389,7 @@ for (const historyControl of ['', 'ignorespace']) {
     const { buildWrappedCommand } = require('./ptyExecHelpers.cjs');
     const marker = '__NCMCP_FALLBACK_GUARD__';
     const input = `HISTFILE=/dev/null; HISTCONTROL=${historyControl}; PS1=; PS2=\nbuiltin() { printf UNEXPECTED_FALLBACK; }\ncommand history -c\necho user_one\n`
-      + buildLiveShellProbe(marker)
+      + buildLiveShellProbe(marker) + buildLiveShellProbeCleanup(marker)
       + buildWrappedCommand('echo command_ok', 'posix', marker, true)
       + '\ncommand history\nexit\n';
     const result = spawnSync('/bin/bash', ['--noprofile', '--norc', '-i'], {
@@ -424,18 +406,17 @@ for (const historyControl of ['', 'ignorespace']) {
 }
 
 for (const stop of ['cancel', 'timeout']) {
-  test(`paced probe stops writing after ${stop}`, async () => {
+  test(`paced Bash probe cleanup stops writing after ${stop}`, async () => {
     const pty = new EventEmitter();
     const writes = [];
     pty.write = data => writes.push(data);
     const job = startPtyJob(pty, 'echo must_not_run', {
       shellKind: 'posix', probeLiveShell: true, timeoutMs: stop === 'timeout' ? 70 : 1000,
-      // bash flavor keeps the long multiline probe that spans several paced
-      // 128-char chunks (unknown flavors type the short zsh-safe probe).
-      posixFlavor: 'bash', enforceWallTimeout: stop === 'timeout',
+      enforceWallTimeout: stop === 'timeout',
     });
+    pty.emit('data', `${job.marker}_P:bash\n${job.marker}_Q`);
     await new Promise(resolve => setTimeout(resolve, 45));
-    assert.ok(writes.length >= 2, 'probe must have started a later chunk');
+    assert.ok(writes.length >= 3, 'cleanup must have started a later chunk');
     if (stop === 'cancel') {
       job.cancel();
       pty.emit('close');
@@ -445,5 +426,21 @@ for (const stop of ['cancel', 'timeout']) {
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(writes.length, count);
     assert.ok(writes.every(data => !data.includes('must_not_run')));
+  });
+}
+
+for (const shellName of ['zsh', '/bin/zsh', 'zsh-5.9', 'fish', 'bash', 'sh', 'renamed-bash']) {
+  test(`live probe defers Bash history input until shell reply (${shellName})`, async () => {
+    const pty = new EventEmitter();
+    const writes = [];
+    pty.write = (data) => writes.push(String(data));
+    const job = startPtyJob(pty, 'printf success', { shellKind: 'posix', probeLiveShell: true, timeoutMs: 1000 });
+    assert.doesNotMatch(writes.join(''), /history -d|printf success/);
+    pty.emit('data', `${job.marker}_P:${shellName}\n${job.marker}_Q`);
+    const deferred = writes.slice(1).join('');
+    const needsCleanup = shellName !== 'fish' && !/zsh/.test(shellName);
+    assert.equal(deferred.includes('\\command eval'), needsCleanup);
+    pty.emit('data', `${job.marker}_S\nsuccess\n${job.marker}_E:0\n`);
+    assert.equal((await job.resultPromise).exitCode, 0);
   });
 }

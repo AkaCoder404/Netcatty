@@ -192,29 +192,6 @@ function resolveEffectiveShellKind(shellKind, expectedPrompt, options = {}) {
   return "posix";
 }
 
-// Restrict the zsh single-line wrapper flavor to shells whose basename is
-// recognizably zsh (including Homebrew versioned binaries). Unknown paths keep
-// the generic multiline POSIX wrapper, and the live shell probe can still
-// refine the flavor from the running shell's comm name.
-function posixFlavorFromShellPath(shellPath) {
-  const base = String(shellPath || "")
-    .split(/[\\/]/)
-    .pop()
-    .trim();
-  return /^zsh([-.][0-9][^/]*)?$/i.test(base) ? "zsh" : "";
-}
-
-// Best-known zsh flavor for a session, evaluated before the live shell probe
-// is typed. The configured executable path covers local terminals; remote
-// sessions have no executable path, so fall back to the probed login-shell
-// path (from issue #1854's remote probe). The live shell probe runs before
-// any wrapper is typed and still refines the flavor from the actually running
-// shell, so a zsh login session running bash falls back to the generic form.
-function posixFlavorForSession(session) {
-  return posixFlavorFromShellPath(session?.shellExecutable)
-    || posixFlavorFromShellPath(session?._loginShellPath);
-}
-
 // Discard unfinished prompt-line input before the agent wrapper so typed-but-
 // not-entered text is not concatenated onto the injected command (#2962).
 // Raw/serial devices have no portable line-kill binding; leave them alone.
@@ -266,7 +243,7 @@ function buildBashHistoryCleanup(marker, keepDispatcher = false) {
   ].join(` \\\n: "${marker}"; `);
 }
 
-function buildPosixWrapperBody(command, marker, startFormat) {
+function buildPosixWrapperBody(command, marker, startFormat, { omitBashHistoryCleanup = false } = {}) {
   const noPager = "PAGER=cat SYSTEMD_PAGER= GIT_PAGER=cat LESS= ";
   const commandLines = String(command || "").replace(/\r\n?/g, "\n").split("\n");
   let cmdAssign = commandLines.length > 1
@@ -296,7 +273,7 @@ function buildPosixWrapperBody(command, marker, startFormat) {
     }
     cmdAssign = `${marker}_cmd=$(${writes.join(`; \\\n: '${marker}'; `)})`;
   }
-  const historyCleanup = buildBashHistoryCleanup(marker);
+  const historyCleanup = omitBashHistoryCleanup ? [] : [buildBashHistoryCleanup(marker)];
   // OpenWrt builds BusyBox with a 512-byte interactive line editor. Keep
   // every physical line below that limit, even for short user commands.
   // Emit a short standalone input marker before the shell reads any PS2
@@ -305,40 +282,9 @@ function buildPosixWrapperBody(command, marker, startFormat) {
     ` : '${marker}'; ${cmdAssign}`,
     `{ printf '${startFormat}' '${marker}_S'; trap ':' INT; ( ${noPager}eval "$${marker}_cmd" ); __NCMCP_rc=$?; trap - INT`,
     `printf '%s\\n' '${marker}_E:'"$__NCMCP_rc"`,
-    historyCleanup,
+    ...historyCleanup,
     `(exit $__NCMCP_rc); }`,
   ].join(`; \\\n: '${marker}'; `);
-}
-
-// The zsh flavor (#3575): interactive zsh sessions whose line editor is loaded
-// (local macOS sessions with starship + zsh-autosuggestions +
-// zsh-syntax-highlighting) receive the generic POSIX wrapper as several
-// physical lines joined with backslash-newline continuations. If any fragment
-// of that multiline construct is lost or split while the busy line editor
-// consumes keystroke bursts, zsh is left with unterminated `for ... do ...
-// done` / `case` fragments from the Bash-only history cleanup and wedges at a
-// PS2 continuation prompt with parse errors near `done` / `__nc_h_*` for the
-// lifetime of the shell. zsh has no BusyBox-style line-length limit and the
-// Bash-only history cleanup is a runtime no-op in zsh (BASH_VERSION guard), so
-// zsh gets an equivalent single-physical-line wrapper: no PS2 continuations,
-// no mid-construct split points, and the Bash-only cleanup is simply omitted.
-// The Bash wrapper (and every other shell) keeps the established multiline
-// form, including the OpenWrt BusyBox 512-byte interactive line-editor limit.
-function buildZshWrapperBody(command, marker, startFormat) {
-  const noPager = "PAGER=cat SYSTEMD_PAGER= GIT_PAGER=cat LESS= ";
-  const commandLines = String(command || "").replace(/\r\n?/g, "\n").split("\n");
-  // zsh's line editor accepts arbitrarily long physical lines, so multiline
-  // user commands reuse the compact printf-with-multiple-arguments form
-  // instead of the BusyBox-safe bounded quoted pieces.
-  const cmdAssign = commandLines.length > 1
-    ? `${marker}_cmd=$(printf '%s\\n' ${commandLines.map((line) => `'${escapePosixSingleQuoted(line)}'`).join(" ")})`
-    : `${marker}_cmd='${escapePosixSingleQuoted(command)}'`;
-  // Line 1 still runs on its own Enter so the display-suppression marker is
-  // emitted before the (possibly very long) single command line.
-  return [
-    `${marker}=0; printf '\\n%s\\n' '${marker}_I'`,
-    ` : '${marker}'; ${cmdAssign}; { printf '${startFormat}' '${marker}_S'; trap ':' INT; ( ${noPager}eval "$${marker}_cmd" ); __NCMCP_rc=$?; trap - INT; printf '%s\\n' '${marker}_E:'"$__NCMCP_rc"; (exit $__NCMCP_rc); }`,
-  ].join("\n");
 }
 
 function buildWrappedCommand(command, shellKind, marker, separateStartMarker = false, options = {}) {
@@ -377,9 +323,6 @@ function buildWrappedCommand(command, shellKind, marker, separateStartMarker = f
 
     case "posix":
     default: {
-      if (options.posixFlavor === "zsh") {
-        return ` ${buildZshWrapperBody(command, marker, startFormat)}\n`;
-      }
       // Compound command with an early marker on each physical line.
       //
       // Layout: __NCMCP_xxx=0; { ... MARKER_S; eval command; MARKER_E; }
@@ -423,7 +366,7 @@ function buildWrappedCommand(command, shellKind, marker, separateStartMarker = f
       // can opt in by adding `HISTCONTROL=ignoreboth` to ~/.bashrc.
       // Without that config the prefix is harmless; it just doesn't
       // suppress history recording.
-      return ` ${buildPosixWrapperBody(command, marker, "\\n%s\\n")}\n`;
+      return ` ${buildPosixWrapperBody(command, marker, "\\n%s\\n", options)}\n`;
     }
   }
 }
@@ -590,8 +533,6 @@ module.exports = {
   hasExpectedPromptSuffix,
   resolveEffectiveShellKind,
   buildPendingInputClearPrefix,
-  posixFlavorFromShellPath,
-  posixFlavorForSession,
   buildWrappedCommand,
   buildBashHistoryCleanup,
   bashHistoryScratchNames,
