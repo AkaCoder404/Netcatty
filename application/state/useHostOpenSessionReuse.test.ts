@@ -213,3 +213,30 @@ test('unchanged serial direct username matches the actual auto-login input', asy
   await api.update({ host: { ...original, username: 'other-serial-user' } });
   assert.equal(await api.find(), undefined);
 });
+
+for (const [field, value] of [
+  ['localShell', '/bin/bash'], ['localShellArgs', ['--norc']], ['localStartDir', '/replacement'],
+] as const) {
+  test(`a saved local ${field} edit cannot reuse the old process`, async (t) => {
+    const original = host({ protocol: 'local', hostname: 'localhost', localShell: '/bin/zsh', localShellArgs: ['-l'], localStartDir: '/original' });
+    const session = { ...createHostTerminalSession('tab', original), status: 'connected', localShell: original.localShell, localShellArgs: original.localShellArgs, localStartDir: original.localStartDir } as TerminalSession;
+    const api = await harness(original, { sessions: [session] });
+    t.after(api.close);
+    assert.equal((await api.find())?.sessionId, 'tab');
+    await api.update({ host: { ...original, [field]: value } });
+    assert.equal(await api.find(), undefined);
+    const alreadyEdited = await harness({ ...original, [field]: value }, { sessions: [session] });
+    t.after(alreadyEdited.close);
+    assert.equal(await alreadyEdited.find(), undefined, 'opening fields come from the actual local session');
+  });
+}
+
+test('local default shell and cwd treat empty values as omitted but explicit empty args stay distinct', async (t) => {
+  const original = host({ protocol: 'local', hostname: 'localhost' });
+  const api = await harness(original);
+  t.after(api.close);
+  await api.update({ host: { ...original, localShell: '', localStartDir: '', label: 'Renamed' } });
+  assert.equal((await api.find())?.sessionId, 'tab');
+  await api.update({ host: { ...original, localShellArgs: [] } });
+  assert.equal(await api.find(), undefined, 'empty args bypass backend login-shell defaults');
+});

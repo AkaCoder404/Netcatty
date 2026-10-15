@@ -21,6 +21,16 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
   const openingKeys = useRef(new Map<string, Promise<string | undefined>>());
   const connectionKey = useCallback((host: Host) => {
     const protocol = resolveEffectiveTerminalProtocol(host);
+    if (protocol === 'local') {
+      const options = {
+        hostname: host.hostname,
+        localShell: host.localShell || undefined,
+        // undefined lets the backend choose login arguments; [] explicitly does not.
+        localShellArgs: host.localShellArgs,
+        localStartDir: host.localStartDir || undefined,
+      };
+      return buildTransferPoolKey({ hostname: host.hostname, hostId: host.id, protocol, connectionOptions: options });
+    }
     if (protocol === 'telnet') {
       // Match the actual Telnet starter, including explicit empty overrides.
       const identity = host.telnetIdentityId ? identities.find((item) => item.id === host.telnetIdentityId) : undefined;
@@ -86,6 +96,9 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
           etEnabled: session.etEnabled ?? host.etEnabled,
           serialConfig: session.serialConfig ?? host.serialConfig,
           pluginConnection: session.pluginConnection ?? host.pluginConnection,
+          localShell: session.localShell ?? host.localShell,
+          localShellArgs: session.localShellArgs ?? host.localShellArgs,
+          localStartDir: session.localStartDir ?? host.localStartDir,
         }).catch(() => undefined));
       } catch {
         openingKeys.current.set(session.id, Promise.resolve(undefined));

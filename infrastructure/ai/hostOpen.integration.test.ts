@@ -99,6 +99,20 @@ test('MCP host_open forwards the schema input through RPC and vault service to t
   const changedTelnet = await run({ hostId: host.id });
   assert.notEqual(changedTelnet.sessionId, telnet.sessionId, 'the actual Telnet destination port change requires a new transport');
   assert.equal(changedTelnet.reused, undefined);
+  // Current-main fields only: saved-local creation/default snapshots remain #3616's responsibility.
+  tabs.length = 0;
+  host.protocol = 'local';
+  host.hostname = 'localhost';
+  host.localShell = '/bin/zsh';
+  host.localShellArgs = ['-l'];
+  host.localStartDir = '/original';
+  const local = await run({ hostId: host.id });
+  tabs[0].status = 'connected';
+  assert.equal((await run({ hostId: host.id })).sessionId, local.sessionId);
+  host.localStartDir = '/replacement';
+  const changedLocal = await run({ hostId: host.id });
+  assert.notEqual(changedLocal.sessionId, local.sessionId, 'an explicit saved local directory change must not reuse the old process');
+  assert.equal(changedLocal.reused, undefined);
   // Saved serial hosts use the same first-party host_open path and factory.
   tabs.length = 0;
   host.protocol = 'serial';
