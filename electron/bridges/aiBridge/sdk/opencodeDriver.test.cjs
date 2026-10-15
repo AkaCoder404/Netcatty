@@ -511,6 +511,12 @@ for (const scoped of [false, true]) {
           type: "session.error",
           properties: { ...(scoped ? { sessionID: "sess-1" } : {}), error: { data: { message } } },
         };
+        if (!scoped) {
+          yield {
+            type: "session.error",
+            properties: { error: { data: { message: "Failed to install another plugin" } } },
+          };
+        }
         yield {
           type: "message.part.updated",
           properties: { part: { type: "text", sessionID: "sess-1", id: "p1", text: "reply" }, delta: "reply" },
@@ -534,6 +540,9 @@ for (const scoped of [false, true]) {
     assert.equal(events.some((event) => event.k === "warning" && event.message === message), !scoped);
     assert.equal(events.some((event) => event.k === "text" && event.t === "reply"), !scoped);
     assert.equal(events.some((event) => event.k === "done"), !scoped);
+    const warnings = events.filter((event) => event.k === "warning");
+    assert.equal(warnings.length, scoped ? 0 : 2);
+    assert.equal(new Set(warnings.map((event) => event.id)).size, warnings.length);
   });
 }
 
