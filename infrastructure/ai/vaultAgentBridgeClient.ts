@@ -725,7 +725,7 @@ export async function handleVaultAgentOp(
           protocol,
           host: summarizeHostForList(effectiveHost),
           message:
-            'Reused the existing session for this host (same sessionId). If it is not connected yet, the tab is auto-reconnecting — wait briefly and use get_environment or terminal_execute against this sessionId. Do not call session_close on it unless the user asks; pass newTab true to force a separate tab instead.',
+            'Reused the existing session for this host (same sessionId). If it is not connected yet, the tab is connecting or reconnecting — wait briefly and use get_environment or terminal_execute against this sessionId. Complete any authentication prompt in the Netcatty UI if needed. Do not call session_close on it unless the user asks; pass newTab true to force a separate tab instead.',
         };
       }
 

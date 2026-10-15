@@ -20,6 +20,54 @@ function setup(t, { sessions } = {}) {
   return bridge;
 }
 
+test('reusing a user tab adds visibility without ownership or idle tracking', async (t) => {
+  const bridge = setup(t);
+  bridge.setVaultAgentInvoker(async () => ({ ok: true, reused: true, sessionId: 'user-tab', hostId: 'host-b', status: 'connected' }));
+  await bridge.dispatchBuiltinRpc('public/vault/hosts/open', { chatSessionId: 'chat-b', hostId: 'host-b' });
+  assert.deepEqual(bridge.getScopedSessionIds('chat-b'), ['user-tab']);
+  assert.equal(bridge.reportOpenedSessionActivity({ sessionId: 'user-tab', phase: 'touch' }), false);
+  const close = await bridge.dispatchBuiltinRpc('public/session/close', { chatSessionId: 'chat-b', sessionId: 'user-tab' });
+  assert.equal(close.ok, false);
+  assert.match(close.error, /not opened by the current AI scope/);
+});
+
+test('reuse keeps the original chat owner and its idle tracking', async (t) => {
+  const bridge = setup(t);
+  const calls = [];
+  bridge.setVaultAgentInvoker(async (op, params) => {
+    calls.push({ op, params });
+    if (op === 'session.close') return { ok: true };
+    return { ok: true, reused: params.chatSessionId !== 'owner', sessionId: 'shared-tab', hostId: 'host-b', status: 'connected' };
+  });
+  for (const chatSessionId of ['owner', 'borrower']) {
+    await bridge.dispatchBuiltinRpc('public/vault/hosts/open', { chatSessionId, hostId: 'host-b' });
+  }
+  assert.equal(bridge.reportOpenedSessionActivity({ sessionId: 'shared-tab', phase: 'touch' }), true);
+  assert.equal((await bridge.dispatchBuiltinRpc('public/session/close', { chatSessionId: 'borrower', sessionId: 'shared-tab' })).ok, false);
+  assert.equal((await bridge.dispatchBuiltinRpc('public/session/close', { chatSessionId: 'owner', sessionId: 'shared-tab' })).ok, true);
+  assert.equal(calls.filter(({ op }) => op === 'session.close').length, 1);
+});
+
+test('a deleted chat cannot reclaim a reused tab or revive its own scope', async (t) => {
+  const bridge = setup(t);
+  let finishOpen;
+  const calls = [];
+  bridge.updateSessionMetadata([{ sessionId: 'user-tab', connected: true }], 'original');
+  bridge.setVaultAgentInvoker((op) => {
+    calls.push(op);
+    return new Promise((resolve) => { finishOpen = resolve; });
+  });
+  const opening = bridge.dispatchBuiltinRpc('public/vault/hosts/open', { chatSessionId: 'deleted', hostId: 'host-b' });
+  await bridge.cleanupScopedMetadata('deleted');
+  bridge.mergeSessionMetadata([{ sessionId: 'user-tab', connected: true }], 'deleted');
+  finishOpen({ ok: true, reused: true, sessionId: 'user-tab', status: 'connected' });
+  assert.equal((await opening).ok, true);
+  assert.deepEqual(calls, ['host.open']);
+  assert.deepEqual(bridge.getScopedSessionIds('deleted'), []);
+  assert.deepEqual(bridge.getScopedSessionIds('original'), ['user-tab']);
+  assert.equal(bridge.reportOpenedSessionActivity({ sessionId: 'user-tab', phase: 'touch' }), false);
+});
+
 test("getContext keeps a scoped disconnected session visible with connected:false", async (t) => {
   const bridge = setup(t);
   bridge.updateSessionMetadata([

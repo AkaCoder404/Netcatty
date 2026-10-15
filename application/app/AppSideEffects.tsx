@@ -53,6 +53,7 @@ import {
 } from '../../domain/terminalAppearance';
 import { selectConnectionLogForTerminalDataCapture } from '../../domain/connectionLog';
 import { collectSessionIds } from '../../domain/workspace';
+import { findReusableHostSession } from '../../domain/hostOpenSession';
 import type { PaneMagnificationController } from '../../domain/paneMagnification';
 import { resolveCloseIntent } from '../state/resolveCloseIntent';
 import { resolveSnippetsShortcutIntent } from '../state/resolveSnippetsShortcutIntent';
@@ -1433,13 +1434,7 @@ export function AppSideEffects() {
   }, [handleConnectToHost]);
 
   const findExistingSessionForHostForVaultAgent = useCallback((hostId: string) => {
-    if (!hostId) return undefined;
-    const matches = sessions.filter((session) => session.hostId === hostId);
-    // Prefer a connected tab; otherwise reuse the first match so an already
-    // reconnecting tab is not duplicated by a second host_open.
-    const picked = matches.find((session) => session.status === 'connected') ?? matches[0];
-    if (!picked) return undefined;
-    return { sessionId: picked.id, connected: picked.status === 'connected' };
+    return findReusableHostSession(sessions, hostId);
   }, [sessions]);
 
   const closeSessionForVaultAgent = useCallback((sessionId: string) => {

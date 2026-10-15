@@ -1615,6 +1615,17 @@ const dispatchCapabilityRpc = createCapabilityRpcDispatcher({
     // explicitly closes it while that reply is still in flight, the eventual
     // result must not revive ownership or scope metadata for the closed tab.
     if ((closedTerminalSessionRevisions.get(sessionId) || 0) > generation?.closeRevision) return;
+    // Reuse adds visibility only: never grant ownership or change the original
+    // owner's idle lifecycle merely because another chat referenced the tab.
+    if (result?.reused === true) {
+      if (generation?.ownershipGeneration?.revoked) {
+        // A late renderer merge must not recreate a deleted chat's scope.
+        scopedMetadata.delete(chatSessionId);
+        return;
+      }
+      ensureOpenedSessionMetadata(chatSessionId, sessionId, result);
+      return;
+    }
     if (!openedSessionOwnership.register(
       chatSessionId,
       sessionId,
@@ -1627,9 +1638,6 @@ const dispatchCapabilityRpc = createCapabilityRpcDispatcher({
       // host_open mints a fresh tab/session id. A reconnect with that id is the
       // same logical tab and must also be reclaimed after its initiating chat
       // was deleted; unrelated sessions do not reuse the minted id.
-      // A reused sessionId (#3612) is an existing tab — possibly another scope's
-      // or the user's own — and must never be reclaimed by a deleted chat.
-      if (result?.reused === true) return;
       sessionIdleManager.track(chatSessionId, sessionId);
       await sessionService.closeTracked({ chatSessionId, sessionId });
       // A failed close stays idle-tracked so the normal bounded retry can try
@@ -1643,10 +1651,7 @@ const dispatchCapabilityRpc = createCapabilityRpcDispatcher({
     // host_open merge but before this async operation completes. Once the open
     // succeeds, restore the returned session atomically with its ownership.
     ensureOpenedSessionMetadata(chatSessionId, sessionId, result);
-    // A reused session keeps whatever idle lifecycle it already had — a fresh
-    // idle timer must not reclaim an existing tab (possibly the user's) just
-    // because an agent referenced it.
-    if (result?.reused !== true) sessionIdleManager.track(chatSessionId, sessionId);
+    sessionIdleManager.track(chatSessionId, sessionId);
   },
 });
 
@@ -2293,7 +2298,7 @@ async function handleGetContext(params) {
       "Use the provided tools to execute commands through the sessions exposed by Netcatty. " +
       buildTerminalToolGuidance(toolHints) +
       "Serial sessions (protocol: serial, shellType: raw) do not run a standard shell — commands are sent as-is. " +
-      "A session listed with connected false is still in the scope: its tab is alive and, for SSH, auto-reconnects with the same sessionId — wait and retry the same sessionId instead of calling host_open again (host_open reuses an existing session for the same host by default). " +
+      "A session listed with connected false is still in the scope. SSH auto-reconnect keeps the same sessionId: wait and retry that session while it reconnects. Inactive disconnected or restored tabs may require user action; host_open reuses connected or connecting sessions by default and opens a connection when none is usable. " +
       "Network device sessions (deviceType: network) use vendor CLIs (Huawei VRP, Cisco IOS, etc.) — commands are sent as-is without shell wrapping, and exit codes are unavailable. " +
       "Vault snippets, port forwarding rules/tunnels, and SFTP read/write tools are available when exposed in the tool list. " +
       "Always prefer these tools over suggesting the user to do things manually.",
