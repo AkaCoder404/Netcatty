@@ -101,16 +101,27 @@ function validateToolCallResultPairing(
  * provider thread replays the retained history through it and safely discards
  * exchanges whose metadata no longer matches the active provider.
  */
+/** Keep the preview but remove unusable source-session output references. */
+function stripSourceOutputHandles(value: string): string {
+  return value
+    .replace(/\bhandleId=tool-output-[A-Za-z0-9-]+/g, '[saved output remains in the original chat]')
+    .replace(/"handleId"\s*:\s*"tool-output-[A-Za-z0-9-]+"/g, '"handleId":null,"note":"Saved output remains in the original chat"');
+}
+
 export function stripMessageContinuationState<M extends ForkMessageLike>(message: M): M {
-  if (
-    message.statusText == null
-    && message.pendingApproval == null
-  ) {
-    return message;
-  }
-  const next = { ...message };
-  delete (next as Record<string, unknown>).statusText;
-  delete (next as Record<string, unknown>).pendingApproval;
+  const next = {
+    ...message,
+    content: stripSourceOutputHandles(message.content),
+    ...(message.thinking ? { thinking: stripSourceOutputHandles(message.thinking) } : {}),
+    ...(message.toolResults ? {
+      toolResults: message.toolResults.map(result => ({
+        ...result,
+        ...(result.content ? { content: stripSourceOutputHandles(result.content) } : {}),
+      })),
+    } : {}),
+  };
+  delete next.statusText;
+  delete next.pendingApproval;
   return next;
 }
 
@@ -167,7 +178,7 @@ export function planSessionFork<M extends ForkMessageLike>(
       return { ok: false, reason: 'compaction-covers-discarded' };
     }
     nextCompaction = {
-      summary: compaction.summary,
+      summary: stripSourceOutputHandles(compaction.summary),
       compactedMessageCount: compaction.compactedMessageCount,
     };
   }
@@ -179,39 +190,6 @@ export function planSessionFork<M extends ForkMessageLike>(
     messages: retained.map(stripMessageContinuationState),
     ...(nextCompaction ? { contextCompaction: nextCompaction } : {}),
   } as ForkPlan<M>;
-}
-
-/**
- * Saved-output handle ids are advertised in tool-result notices as
- * `handleId=tool-output-…`. Collect the ids the retained prefix references so
- * the fork's handles can be rehomed/restored into the new session's namespace
- * (keeps the notices valid for `tool_output_read` after the fork).
- *
- * A carried-over compaction summary can also reference archive handles that
- * no longer appear in any retained message (compaction replaces all earlier
- * messages with the summary), so scan the optional summary text too.
- */
-export function collectForkHandleIds(
-  messages: readonly ForkMessageLike[],
-  summary?: string,
-): string[] {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  const scan = (value: string | undefined) => {
-    if (!value) return;
-    for (const match of value.matchAll(/\bhandleId=(tool-output-[A-Za-z0-9-]+)/g)) {
-      if (seen.has(match[1])) continue;
-      seen.add(match[1]);
-      ids.push(match[1]);
-    }
-  };
-  for (const message of messages) {
-    scan(message.content);
-    scan(message.thinking);
-    for (const result of message.toolResults ?? []) scan(result.content);
-  }
-  scan(summary);
-  return ids;
 }
 
 export function canForkFromMessage(

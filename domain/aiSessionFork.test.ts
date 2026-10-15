@@ -4,7 +4,6 @@ import test from 'node:test';
 import {
   buildForkTitle,
   canForkFromMessage,
-  collectForkHandleIds,
   planSessionFork,
   stripMessageContinuationState,
 } from './aiSessionFork.ts';
@@ -197,15 +196,15 @@ test('planSessionFork pairs repeated tool-call ids by occurrence', () => {
   });
 });
 
-test('stripMessageContinuationState keeps untouched references stable', () => {
+test('stripMessageContinuationState preserves values and clears transient state', () => {
   const plain = msg({ content: 'x' });
-  assert.equal(stripMessageContinuationState(plain), plain);
+  assert.deepEqual(stripMessageContinuationState(plain), plain);
   const withStatusText = msg({ content: 'x', statusText: 'streaming…' });
   assert.notEqual(stripMessageContinuationState(withStatusText), withStatusText);
   const withPendingApproval = msg({ content: 'x', pendingApproval: {} });
   assert.notEqual(stripMessageContinuationState(withPendingApproval), withPendingApproval);
   const continuationOnly = msg({ content: 'x', providerContinuation: {} });
-  assert.equal(stripMessageContinuationState(continuationOnly), continuationOnly);
+  assert.deepEqual(stripMessageContinuationState(continuationOnly), continuationOnly);
 });
 
 test('buildForkTitle appends a fork marker without double-suffixing', () => {
@@ -221,17 +220,14 @@ test('canForkFromMessage mirrors planSessionFork success', () => {
   assert.equal(canForkFromMessage(source, 'nope'), false);
 });
 
-test('collectForkHandleIds also scans a carried-over compaction summary', () => {
-  const messages: ForkMessage[] = [
-    msg({ role: 'user', content: 'continue from the summary' }),
-    msg({ content: 'noted, handleId=tool-output-abc123 is the live one' }),
-  ];
-  const summary = 'Earlier turn archived locally: handleId=tool-output-xyz789. '
-    + 'Uses handleId=tool-output-abc123 again.';
-  assert.deepEqual(
-    collectForkHandleIds(messages, summary),
-    ['tool-output-abc123', 'tool-output-xyz789'],
-  );
-  // No summary: unchanged behavior.
-  assert.deepEqual(collectForkHandleIds(messages), ['tool-output-abc123']);
+test('fork keeps output previews but removes source-only saved-output references', () => {
+  const assistant = msg({ content: 'preview handleId=tool-output-abc', toolResults: [{ toolCallId: 'call', content: '{"handleId":"tool-output-xyz","preview":"retained"}' }] });
+  const source = session([msg({ toolCalls: [{ id: 'call' }] }), assistant], { summary: 'archive handleId=tool-output-summary', compactedMessageCount: 1 });
+  const plan = planSessionFork(source, assistant.id);
+  assert.ok(plan.ok);
+  assert.doesNotMatch(JSON.stringify(plan), /tool-output-/);
+  assert.match(plan.messages[1].content, /preview/);
+  assert.match(plan.messages[1].toolResults![0].content!, /retained/);
+  assert.equal(JSON.parse(plan.messages[1].toolResults![0].content!).handleId, null);
+  assert.match(source.messages[1].content, /tool-output-abc/);
 });

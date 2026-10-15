@@ -1865,13 +1865,10 @@ const AIChatSidePanelActive: React.FC<AIChatSidePanelProps> = ({
   const handleForkFromMessage = useCallback(async (messageId: string) => {
     const sourceSessionId = activeSessionRef.current?.id ?? activeSessionId;
     if (!sourceSessionId) return;
-    // A double-click enters this handler twice before the first fork finishes
-    // rehoming handles and switching sessions; reject the duplicate so one
+    // Reject a double-click while the new session is being selected so one
     // interaction cannot create two forks.
     if (!tryBeginSendForKey(`fork:${sourceSessionId}`)) return;
     try {
-      // Fork completion awaits handle rehoming (target-owned durable records),
-      // so the new session is fully readable the moment it is exposed.
       const fork = await forkSessionFromMessage?.(sourceSessionId, messageId, {
         type: scopeType,
         targetId: scopeTargetId,
