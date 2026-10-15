@@ -149,3 +149,25 @@ test("normalize keeps custom (non-built-in) rules verbatim", () => {
   assert.deepEqual(rule.patterns, customRule.patterns);
   assert.equal(rule.label, customRule.label);
 });
+
+test("Unix path highlighting covers terminal paths without matching relative prose or URL slashes", () => {
+  const rule = getRule(DEFAULT_KEYWORD_HIGHLIGHT_RULES, "unix-path");
+  for (const path of ["/sbin/iptables", "/var/log/syslog", "/usr/local/bin/g++", "~/projects/netcatty"]) {
+    const matches = [...`'${path}'`.matchAll(new RegExp(rule.patterns[0], "gi"))];
+    assert.deepEqual(matches.map((match) => match[0]), [path]);
+  }
+  for (const text of ["RELATED,ESTABLISHED", "TCP/IP", "https://example.com/log", " / "]) {
+    assert.equal(matchesAny(rule.patterns, text), false, text);
+  }
+});
+
+test("Unix path rule upgrades old settings while preserving disabled highlights and edits", () => {
+  const legacy = DEFAULT_KEYWORD_HIGHLIGHT_RULES.filter((rule) => rule.id !== "unix-path");
+  const upgraded = normalizeTerminalSettings({ keywordHighlightEnabled: false, keywordHighlightRules: legacy });
+  assert.equal(upgraded.keywordHighlightEnabled, false);
+  assert.equal(getRule(upgraded.keywordHighlightRules, "unix-path").enabled, true);
+
+  const edited = { ...getRule(upgraded.keywordHighlightRules, "unix-path"), color: "#123456", enabled: false, customized: true, patterns: ["/chosen/path"] };
+  const restored = normalizeTerminalSettings({ keywordHighlightRules: [...legacy, edited] });
+  assert.deepEqual(getRule(restored.keywordHighlightRules, "unix-path"), edited);
+});
