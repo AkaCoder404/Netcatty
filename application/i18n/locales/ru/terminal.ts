@@ -332,7 +332,7 @@ export const ruTerminalMessages: Messages = {
   'cloudSync.provider.connecting': 'Подключение...',
   'cloudSync.provider.disconnect': 'Отключить',
   'cloudSync.provider.disconnect.confirmTitle': 'Отключить "{name}"?',
-  'cloudSync.provider.disconnect.confirmMessage': 'Это устройство перестанет синхронизироваться с {name}. Адрес и учётные данные {name}, сохранённые на этом компьютере, будут удалены. Локальное хранилище останется здесь.',
+  'cloudSync.provider.disconnect.confirmMessage': 'Это устройство перестанет синхронизироваться с {name}. Адрес и учётные данные {name}, сохранённые на этом компьютере, будут удалены; если системное хранилище учётных данных недоступно, их может потребоваться удалить вручную. Локальное хранилище останется здесь.',
   'cloudSync.provider.disconnect.confirmAction': 'Отключить',
   'cloudSync.provider.disconnect.toastTitle': 'Отключено',
   'cloudSync.provider.disconnect.cloudRemains': 'Зашифрованные копии синхронизации могут остаться в хранилище {name}. Удалите файл синхронизации там или смените пароль этой учётной записи, прежде чем передавать этот компьютер другому человеку.',

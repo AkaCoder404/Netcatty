@@ -314,7 +314,7 @@ export const enTerminalMessages: Messages = {
   'cloudSync.provider.connecting': 'Connecting...',
   'cloudSync.provider.disconnect': 'Disconnect',
   'cloudSync.provider.disconnect.confirmTitle': 'Disconnect "{name}"?',
-  'cloudSync.provider.disconnect.confirmMessage': 'This device will stop syncing with {name}. The {name} address and credentials saved on this computer will be removed. Your local vault stays here.',
+  'cloudSync.provider.disconnect.confirmMessage': 'This device will stop syncing with {name}. The {name} address and credentials saved on this computer will be removed; if the system credential storage can’t be reached, they may need to be removed manually. Your local vault stays here.',
   'cloudSync.provider.disconnect.confirmAction': 'Disconnect',
   'cloudSync.provider.disconnect.toastTitle': 'Disconnected',
   'cloudSync.provider.disconnect.cloudRemains': 'Encrypted sync copies may still exist in your {name} storage. Remove the sync file there or change that account\'s password before handing this device to someone else.',

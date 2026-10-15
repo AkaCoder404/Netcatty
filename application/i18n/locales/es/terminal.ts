@@ -313,7 +313,7 @@ export const esTerminalMessages: Messages = {
   'cloudSync.provider.connecting': 'Conectando...',
   'cloudSync.provider.disconnect': 'Desconectar',
   'cloudSync.provider.disconnect.confirmTitle': '¿Desconectar "{name}"?',
-  'cloudSync.provider.disconnect.confirmMessage': 'Este dispositivo dejará de sincronizar con {name}. Se eliminarán la dirección y las credenciales de {name} guardadas en este equipo. La bóveda local permanecerá aquí.',
+  'cloudSync.provider.disconnect.confirmMessage': 'Este dispositivo dejará de sincronizar con {name}. Se eliminarán la dirección y las credenciales de {name} guardadas en este equipo; si el almacenamiento de credenciales del sistema no está disponible, es posible que deba eliminarlas manualmente. La bóveda local permanecerá aquí.',
   'cloudSync.provider.disconnect.confirmAction': 'Desconectar',
   'cloudSync.provider.disconnect.toastTitle': 'Desconectado',
   'cloudSync.provider.disconnect.cloudRemains': 'Las copias de sincronización cifradas pueden seguir en tu almacenamiento de {name}. Elimina el archivo de sincronización allí o cambia la contraseña de esa cuenta antes de entregar este equipo a otra persona.',

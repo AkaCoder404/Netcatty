@@ -717,7 +717,7 @@ export const zhTWVaultMessages: Messages = {
   'cloudSync.provider.connecting': '連線中...',
   'cloudSync.provider.disconnect': '中斷連線',
   'cloudSync.provider.disconnect.confirmTitle': '中斷「{name}」？',
-  'cloudSync.provider.disconnect.confirmMessage': '此裝置將停止與 {name} 同步。本機保存的 {name} 位址與憑證將被刪除。本機保險庫仍保留在這台電腦上。',
+  'cloudSync.provider.disconnect.confirmMessage': '此裝置將停止與 {name} 同步。本機保存的 {name} 位址與憑證將被刪除；若系統憑證儲存無法使用，可能需要手動刪除。本機保險庫仍保留在這台電腦上。',
   'cloudSync.provider.disconnect.confirmAction': '中斷連線',
   'cloudSync.provider.disconnect.toastTitle': '已中斷連線',
   'cloudSync.provider.disconnect.cloudRemains': '雲端的加密同步副本可能仍保存在 {name} 儲存空間中。移交裝置前，請到雲端刪除該同步檔案，或變更該帳號的密碼。',

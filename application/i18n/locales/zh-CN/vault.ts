@@ -717,7 +717,7 @@ export const zhCNVaultMessages: Messages = {
   'cloudSync.provider.connecting': '连接中...',
   'cloudSync.provider.disconnect': '断开连接',
   'cloudSync.provider.disconnect.confirmTitle': '断开 “{name}”？',
-  'cloudSync.provider.disconnect.confirmMessage': '此设备将停止与 {name} 同步。本机保存的 {name} 地址与凭据将被删除。本地保险库仍保留在这台电脑上。',
+  'cloudSync.provider.disconnect.confirmMessage': '此设备将停止与 {name} 同步。本机保存的 {name} 地址与凭据将被删除；若系统凭据存储不可用，可能需要手动删除。本地保险库仍保留在这台电脑上。',
   'cloudSync.provider.disconnect.confirmAction': '断开连接',
   'cloudSync.provider.disconnect.toastTitle': '已断开连接',
   'cloudSync.provider.disconnect.cloudRemains': '云端的加密同步副本可能仍保存在 {name} 存储中。移交设备前，请到网盘删除该同步文件，或修改该账号的密码。',
