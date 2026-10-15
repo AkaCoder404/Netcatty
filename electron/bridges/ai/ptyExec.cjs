@@ -28,7 +28,7 @@ const {
 } = require("./ptyExecHelpers.cjs");
 const { extractTrailingIdlePrompt } = require("./shellUtils.cjs");
 
-const { buildLiveShellProbe, parseLiveShellProbe } = require("./liveShellProbe.cjs");
+const { buildLiveShellProbe, buildLiveShellProbeCleanup, parseLiveShellProbe } = require("./liveShellProbe.cjs");
 
 const DEFAULT_FOREGROUND_PTY_CAPTURE_CHARS = 1024 * 1024;
 const END_MARKER_PROMPT_WAIT_MS = 30000;
@@ -243,8 +243,9 @@ function startPtyJob(ptyStream, command, options) {
     // Cancellation replies use the same readable stream as terminal output.
     // Recover session-owned flow control after sending ETX, otherwise a paused
     // renderer can hide the returned prompt/end marker and trigger retries.
+    // Recovery belongs to the session and must still run when a timeout
+    // finishes this job before the queued callback executes.
     queueMicrotask(() => {
-      if (finished) return;
       try {
         onInterrupt?.();
       } catch {
@@ -559,7 +560,9 @@ function startPtyJob(ptyStream, command, options) {
       probeOutput = "";
       if (probe.kind) resolvedShellKind = probe.kind;
       if (finished || cancelRequested) return;
-      writeWrappedCommand();
+      const isZsh = /^zsh(?:[-.][0-9].*)?$/i.test(probe.shellName);
+      const skipProbeCleanup = probe.kind === "fish" || isZsh;
+      writeWrappedCommand(skipProbeCleanup ? "" : buildLiveShellProbeCleanup(marker), isZsh);
       return;
     }
 
@@ -821,9 +824,14 @@ function startPtyJob(ptyStream, command, options) {
     writeNext();
   }
 
-  function writeWrappedCommand() {
-    const wrapped = buildWrappedCommand(command, resolvedShellKind, marker, probeLiveShell);
-    writeInput(`${(skipPendingInputClear ? "" : buildPendingInputClearPrefix(resolvedShellKind))}${wrapped}`);
+  function writeWrappedCommand(probeCleanup = "", isZsh = false) {
+    // The Bash-only cleanup is a no-op in zsh, but its long input still goes
+    // through the configured editor. Keep the existing bounded wrapper and
+    // omit only that unused fragment after a live zsh reply.
+    const wrapped = buildWrappedCommand(command, resolvedShellKind, marker, probeLiveShell, {
+      omitBashHistoryCleanup: isZsh,
+    });
+    writeInput(`${(skipPendingInputClear ? "" : buildPendingInputClearPrefix(resolvedShellKind))}${probeCleanup}${wrapped}`);
   }
 
   // Prime the renderer's display suppression before the first byte is typed
