@@ -78,55 +78,30 @@ export interface ResolveDefaultLocalShellContext {
   ) => { command: string; args?: string[] } | null;
 }
 
-/**
- * Directory `startLocal` will actually use: the host's own directory, or the
- * Settings → Terminal directory when the host leaves it blank. Same `||`
- * precedence as the starter, so the session snapshot matches the launch.
- */
-const inheritLocalStartDir = (
-  host: Host,
-  ctx: ResolveDefaultLocalShellContext,
-): Host => {
-  if (host.localStartDir) return host;
-  const inherited = ctx.terminalSettings?.localStartDir;
-  if (!inherited) return host;
-  return { ...host, localStartDir: inherited };
-};
-
-/**
- * Materialize the local shell and start directory a saved local host launches
- * with.
- *
- * Hosts saved as "System default shell" carry no `localShell`. Resolve the
- * Settings → Terminal shell so connect, tray/dock, workspace, and snippet
- * paths launch that shell instead of the backend OS default. Hosts that
- * already specify a shell keep it.
- *
- * A blank `localStartDir` inherits the Settings directory on the same pass.
- * Session creation copies that value, so Copy Tab keeps the directory that
- * launched even if Settings or the Vault host change later. Non-local hosts
- * are unchanged.
- */
+/** Resolve launch settings before a local session snapshots them. */
 export const resolveHostDefaultLocalShell = (
   host: Host,
   ctx: ResolveDefaultLocalShellContext,
 ): Host => {
   if (host.protocol !== 'local') return host;
-  const withStartDir = inheritLocalStartDir(host, ctx);
-  if (withStartDir.localShell) return withStartDir;
-  const configuredShell = ctx.terminalSettings?.localShell ?? '';
+  const configuredShell = host.localShell || ctx.terminalSettings?.localShell || '';
+  const customArgs = host.localShell
+    ? host.localShellArgs
+    : configuredShell ? ctx.terminalSettings?.localShellArgs : undefined;
   const resolved = ctx.resolveShellSetting?.(
-    configuredShell,
-    ctx.discoveredShells ?? [],
-    ctx.terminalSettings?.localShellArgs,
+    configuredShell, ctx.discoveredShells ?? [], customArgs,
   );
-  if (!resolved?.command) return withStartDir;
-  const matchedShell = ctx.discoveredShells?.find((s) => s.id === configuredShell);
+  const matchedShell = ctx.discoveredShells?.find((shell) => shell.id === configuredShell);
   return {
-    ...withStartDir,
-    localShell: resolved.command,
-    localShellArgs: resolved.args,
-    localShellName: matchedShell?.name,
-    localShellIcon: matchedShell?.icon,
+    ...host,
+    // Empty means the backend default, not a later Vault/Settings value.
+    localShell: resolved?.command || configuredShell || '',
+    localShellArgs: resolved?.args ?? customArgs,
+    localShellName: host.localShell ? host.localShellName : matchedShell?.name,
+    localShellIcon: host.localShell ? host.localShellIcon : matchedShell?.icon,
+    // The existing launcher expands ~ to home. Capture it explicitly when
+    // neither host nor Settings supplies a directory, so a later global edit
+    // cannot change a copied session's original launch directory.
+    localStartDir: host.localStartDir || ctx.terminalSettings?.localStartDir || '~',
   };
 };

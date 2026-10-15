@@ -20,15 +20,9 @@ export interface LocalTerminalOptions {
 export const LOCAL_TERMINAL_HOST_ID = "local-terminal";
 
 /**
- * Shared empty-array identity for local-shell args snapshots.
- *
- * TerminalSession.localShellArgs is optional, so an `undefined` snapshot is
- * ambiguous: it can mean "launched with no args" or "legacy session saved
- * before args were recorded". Snapshotting an explicit no-args launch as `[]`
- * lets the popup/clone host resolution (`overlaySessionLocalShell`) preserve
- * the session's actual spawn args instead of merging them with args from an
- * edited host. One module-level array keeps reference-identity comparisons
- * (e.g. terminalPaneSessionsEqual) treating equal no-args snapshots as equal.
+ * [] captures the absence of custom arguments instead of inheriting them
+ * from a later host edit. The starter still applies backend defaults to []
+ * and undefined alike. Share the array to preserve pane equality checks.
  */
 const EMPTY_LOCAL_SHELL_ARGS: string[] = [];
 
@@ -154,7 +148,7 @@ export const createHostTerminalSession = (
         host.localShell,
         host.localShell?.trim() ? host.os : runtimePlatformLike(),
       ),
-      localShell: host.localShell,
+      localShell: host.localShell ?? "",
       // Preserve field presence: an edited host must not contribute its args
       // to a session that was launched with an explicit shell and no args.
       localShellArgs: host.localShellArgs ?? EMPTY_LOCAL_SHELL_ARGS,
@@ -163,7 +157,7 @@ export const createHostTerminalSession = (
       // Effective directory from resolveHostDefaultLocalShell, including a
       // Settings directory the saved host inherits. Copy Tab overlays this
       // snapshot, so a later settings or vault edit cannot move the relaunch.
-      localStartDir: host.localStartDir,
+      localStartDir: host.localStartDir || "~",
     } : {}),
     ...(host.ephemeral ? { ephemeralHost: true } : {}),
     ...(host.autoOpenSftpPanel ? { autoOpenSidePanel: "sftp" as const } : {}),

@@ -240,3 +240,15 @@ for (const clone of [createSplitTerminalSessionClone, createCopiedTerminalSessio
     assert.equal(implicit.shellType, "posix", "implicit shells still follow global settings");
   });
 }
+
+test("copied backend-default local snapshot retains its shell semantics after global settings change", () => {
+  const source = session({ protocol: "local", localShell: "", localShellArgs: [], shellType: "powershell", localStartDir: "~" });
+  for (const clone of [
+    createCopiedTerminalSessionClone(source, { id: "copy-default-snapshot", localShellType: "posix" }),
+    createSplitTerminalSessionClone(source, { id: "split-default-snapshot", localShellType: "posix" }),
+  ]) {
+    assert.equal(clone.localShell, "");
+    assert.equal(clone.shellType, "powershell");
+    assert.equal(clone.localStartDir, "~");
+  }
+});

@@ -48,7 +48,7 @@ function getClonedShellType(
   if (session.protocol !== "local") return session.shellType;
   // Clones retain an explicit per-session executable, so its shell type must
   // survive a different global default (e.g. saved CMD with WSL in Settings).
-  return session.localShell
+  return session.localShell !== undefined
     ? (session.shellType ?? classifyLocalShellType(session.localShell))
     : localShellType;
 }

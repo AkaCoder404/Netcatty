@@ -27,9 +27,10 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
         hostname: host.hostname,
         username: '',
         localShell: host.localShell || undefined,
-        // undefined lets the backend choose login arguments; [] explicitly does not.
-        localShellArgs: host.localShellArgs,
-        localStartDir: host.localStartDir || undefined,
+        // The renderer starter omits both absent and empty args so the
+        // backend chooses its discovered/login defaults for either form.
+        localShellArgs: host.localShellArgs?.length ? host.localShellArgs : undefined,
+        localStartDir: host.localStartDir || '~',
       };
       return buildTransferPoolKey({ hostname: host.hostname, hostId: host.id, protocol, connectionOptions: options });
     }
@@ -95,8 +96,9 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
       const host = hosts.find((candidate) => candidate.id === session.hostId);
       if (!host) continue;
       try {
+        const effectiveHost = resolveEffectiveHost(host);
         openingKeys.current.set(session.id, connectionKey({
-          ...resolveEffectiveHost(host),
+          ...effectiveHost,
           hostname: session.hostname,
           username: session.protocol === 'serial' ? resolveEffectiveHost(host).username : session.username,
           port: session.port ?? host.port,
@@ -105,9 +107,9 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
           etEnabled: session.etEnabled ?? host.etEnabled,
           serialConfig: session.serialConfig ?? host.serialConfig,
           pluginConnection: session.pluginConnection ?? host.pluginConnection,
-          localShell: session.localShell ?? host.localShell,
-          localShellArgs: session.localShellArgs ?? host.localShellArgs,
-          localStartDir: session.localStartDir ?? host.localStartDir,
+          localShell: session.localShell ?? effectiveHost.localShell,
+          localShellArgs: session.localShellArgs ?? effectiveHost.localShellArgs,
+          localStartDir: session.localStartDir ?? effectiveHost.localStartDir,
         }).catch(() => undefined));
       } catch {
         openingKeys.current.set(session.id, Promise.resolve(undefined));

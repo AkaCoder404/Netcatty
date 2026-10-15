@@ -4,6 +4,7 @@ import {
   createLocalShellHost,
   getLocalShellHostSubtitle,
   getVaultHostRowSubtitle,
+  resolveHostDefaultLocalShell,
 } from './localShellHost';
 
 test('createLocalShellHost builds a grouped local-protocol host', () => {
@@ -81,4 +82,13 @@ test('getLocalShellHostSubtitle ignores whitespace-only names and allows a fallb
     getLocalShellHostSubtitle({ protocol: 'local', localShellName: '' }, '本地终端'),
     '本地终端',
   );
+});
+
+test('clearing the configured executable does not pass its old custom args to the backend default', () => {
+  const effective = resolveHostDefaultLocalShell(createLocalShellHost({}), {
+    terminalSettings: { localShell: '', localShellArgs: ['--norc'] },
+    resolveShellSetting: () => null,
+  });
+  assert.equal(effective.localShell, '');
+  assert.equal(effective.localShellArgs, undefined);
 });
