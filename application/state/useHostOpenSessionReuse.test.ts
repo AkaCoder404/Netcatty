@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import type { Host, Identity, SSHKey, TerminalSession } from '../../domain/models';
+import { updateRestoredSessionStatusState } from './sessionRestoreState';
+import { resolveTerminalSessionHost } from '../../domain/terminalHostResolution';
 import { createHostTerminalSession } from './sessionFactories';
 import { useHostOpenSessionReuse } from './useHostOpenSessionReuse';
 
@@ -116,4 +118,31 @@ test('the captured serial settings come from the opening session even if the vau
   const api = await harness({ ...original, serialConfig: { ...original.serialConfig!, baudRate: 19200 } }, { sessions: [session] });
   t.after(api.close);
   assert.equal(await api.find(), undefined);
+});
+
+for (const changedField of ['configuration', 'credentialId'] as const) {
+  test(`a restored plugin tab keeps its opening ${changedField} after manual reconnect`, async (t) => {
+    const providerId = 'com.example.transport.connection';
+    const original = host({ protocol: `plugin:${providerId}`, pluginConnection: { providerId, configuration: { endpoint: 'original.invalid' }, credentialId: 'original-credential-reference' } });
+    const edited = { ...original, pluginConnection: { ...original.pluginConnection!, [changedField]: changedField === 'configuration' ? { endpoint: 'replacement.invalid' } : 'replacement-credential-reference' } };
+    const restored: TerminalSession = { ...createHostTerminalSession('tab', original), status: 'disconnected', restoreState: 'restored-disconnected' };
+    const api = await harness(edited, { sessions: [restored] });
+    t.after(api.close);
+    assert.equal(await api.find(), undefined);
+    const reconnecting = updateRestoredSessionStatusState([restored], restored.id, 'connecting');
+    const actual = resolveTerminalSessionHost({ session: reconnecting[0], hosts: [edited], groupConfigs: [], proxyProfiles: [], localOs: 'linux' });
+    assert.deepEqual(actual.pluginConnection, original.pluginConnection, 'the real terminal resolver uses the restored opening configuration');
+    await api.update({ sessions: reconnecting });
+    assert.equal(await api.find(), undefined, 'host_open must not call that old transport the edited vault connection');
+  });
+}
+
+test('an unchanged restored plugin configuration can be reused after manual reconnect', async (t) => {
+  const providerId = 'com.example.transport.connection';
+  const original = host({ protocol: `plugin:${providerId}`, pluginConnection: { providerId, configuration: { endpoint: 'original.invalid' } } });
+  const restored: TerminalSession = { ...createHostTerminalSession('tab', original), status: 'disconnected', restoreState: 'restored-disconnected' };
+  const api = await harness({ ...original, label: 'Renamed' }, { sessions: [restored] });
+  t.after(api.close);
+  await api.update({ sessions: updateRestoredSessionStatusState([restored], restored.id, 'connecting') });
+  assert.equal((await api.find())?.sessionId, 'tab');
 });

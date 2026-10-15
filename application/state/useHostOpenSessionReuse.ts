@@ -60,6 +60,7 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
           moshEnabled: session.moshEnabled ?? host.moshEnabled,
           etEnabled: session.etEnabled ?? host.etEnabled,
           serialConfig: session.serialConfig ?? host.serialConfig,
+          pluginConnection: session.pluginConnection ?? host.pluginConnection,
         }).catch(() => undefined));
       } catch {
         openingKeys.current.set(session.id, Promise.resolve(undefined));
