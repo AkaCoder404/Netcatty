@@ -141,6 +141,7 @@ export const createHostTerminalSession = (
     // shellType matches ordinary local-terminal creation so captured-CWD
     // restore can reject POSIX injection into CMD/PowerShell sessions.
     ...(host.protocol === "local" ? {
+      username: "local",
       // With an explicit shell the basename classifies it on any OS, so the
       // saved host.os stays the fallback; a default-shell host launches the
       // current machine's OS default, so classify against the runtime.

@@ -104,6 +104,7 @@ const overlaySessionLocalShell = (session: TerminalSession, host: Host): Host =>
   if (session.protocol !== "local") return host;
   return {
     ...host,
+    username: session.username,
     localShell: session.localShell ?? host.localShell,
     localShellArgs: session.localShellArgs ?? host.localShellArgs,
     localShellName: session.localShellName ?? host.localShellName,

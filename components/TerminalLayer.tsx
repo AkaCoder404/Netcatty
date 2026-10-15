@@ -183,7 +183,7 @@ function buildScriptSessionMeta(
     connected: session.status === 'connected',
     name: session.customName || session.hostLabel || host?.label,
     hostname: host?.hostname ?? session.hostname,
-    username: host?.username ?? session.username,
+    username: session.protocol === 'local' ? session.username : host?.username ?? session.username,
   };
 }
 

@@ -229,3 +229,16 @@ test("resolveHostDefaultLocalShell keeps an explicit start directory and ignores
   assert.equal(resolvedSsh.localStartDir, undefined);
   assert.equal(resolvedSsh, ssh);
 });
+
+test("saved local sessions use the ordinary local username marker without changing vault or SSH credentials", () => {
+  const saved = localVaultHost({ username: "" });
+  const ordinary = createLocalTerminalSession("ordinary-local");
+  const opened = createHostTerminalSession("saved-local", saved);
+  assert.equal(opened.username, ordinary.username);
+  assert.equal(opened.username, "local");
+  assert.equal(saved.username, "");
+  const remote = { ...saved, protocol: "ssh" as const, username: "remote-user" };
+  assert.equal(createHostTerminalSession("ssh-session", remote).username, "remote-user");
+  const resolved = resolveTerminalSessionHost({ session: opened, hosts: [saved], groupConfigs: [], proxyProfiles: [], localOs: "linux" });
+  assert.equal(resolved.username, ordinary.username, "terminal-run scripts receive the same local marker");
+});
