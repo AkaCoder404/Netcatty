@@ -146,3 +146,70 @@ test('an unchanged restored plugin configuration can be reused after manual reco
   await api.update({ sessions: updateRestoredSessionStatusState([restored], restored.id, 'connecting') });
   assert.equal((await api.find())?.sessionId, 'tab');
 });
+
+for (const [field, value] of [
+  ['telnetPort', 2324], ['telnetUsername', 'other-telnet-user'], ['telnetPassword', 'rotated-telnet-password'],
+] as const) {
+  test(`a Telnet ${field} edit cannot reuse the old transport`, async (t) => {
+    const original = host({ protocol: 'telnet', telnetPort: 2323, telnetUsername: 'telnet-user', telnetPassword: 'telnet-password' });
+    const api = await harness(original);
+    t.after(api.close);
+    assert.equal((await api.find())?.sessionId, 'tab');
+    await api.update({ host: { ...original, [field]: value } });
+    assert.equal(await api.find(), undefined);
+  });
+}
+
+test('Telnet identity credential rotation and missing identity reject reuse', async (t) => {
+  const identity: Identity = { id: 'telnet-login', label: 'Telnet login', username: 'telnet-user', password: 'original', authMethod: 'password', created: 0 };
+  const original = host({ protocol: 'telnet', telnetIdentityId: identity.id });
+  const api = await harness(original, { identities: [identity] });
+  t.after(api.close);
+  assert.equal((await api.find())?.sessionId, 'tab');
+  for (const identities of [[{ ...identity, username: 'other-user' }], [{ ...identity, password: 'rotated' }], []]) {
+    await api.update({ identities });
+    assert.equal(await api.find(), undefined);
+  }
+});
+
+test('Telnet explicit empty login does not fall back to SSH login fields', async (t) => {
+  const original = host({ protocol: 'telnet', telnetUsername: '', telnetPassword: '', password: 'ssh-only' });
+  const api = await harness(original);
+  t.after(api.close);
+  assert.equal((await api.find())?.sessionId, 'tab');
+  await api.update({ host: { ...original, label: 'Renamed', username: 'unrelated-ssh-user', password: 'unrelated-ssh-password', identityId: 'missing-ssh-identity', telnetPort: 23 } });
+  assert.equal((await api.find())?.sessionId, 'tab');
+  await api.update({ host: { ...original, telnetUsername: undefined, telnetPassword: undefined } });
+  assert.equal(await api.find(), undefined, 'removing explicit empty overrides enables the actual fallback login');
+});
+
+for (const transport of [{ protocol: 'et' as const }, { protocol: 'ssh' as const, etEnabled: true }]) {
+  test(`changing a jump ET server port rejects the old ${JSON.stringify(transport)} transport`, async (t) => {
+    const original = host({ ...transport, hostChain: { hostIds: ['jump'] } });
+    const jump = host({ id: 'jump', hostname: 'jump.invalid', etPort: 2022 });
+    const api = await harness(original, { hosts: [jump] });
+    t.after(api.close);
+    assert.equal((await api.find())?.sessionId, 'tab');
+    await api.update({ hosts: [original, { ...jump, etPort: 3022 }] });
+    assert.equal(await api.find(), undefined);
+  });
+}
+
+test('serial direct auto-login password is not masked by an unrelated SSH identity', async (t) => {
+  const identity: Identity = { id: 'ssh-login', label: 'SSH login', username: 'ssh-user', password: 'ssh-password', authMethod: 'password', created: 0 };
+  const original = host({ protocol: 'serial', hostname: '/dev/tty.test', username: '', password: 'serial-password', identityId: identity.id });
+  const api = await harness(original, { identities: [identity] });
+  t.after(api.close);
+  assert.equal((await api.find())?.sessionId, 'tab');
+  await api.update({ host: { ...original, password: 'rotated-serial-password' } });
+  assert.equal(await api.find(), undefined);
+});
+
+test('unchanged serial direct username matches the actual auto-login input', async (t) => {
+  const original = host({ protocol: 'serial', hostname: '/dev/tty.test', username: 'serial-user', password: 'serial-password' });
+  const api = await harness(original);
+  t.after(api.close);
+  assert.equal((await api.find())?.sessionId, 'tab');
+  await api.update({ host: { ...original, username: 'other-serial-user' } });
+  assert.equal(await api.find(), undefined);
+});
