@@ -7,7 +7,7 @@ import { netcattyBridge } from '../../infrastructure/services/netcattyBridge';
 import {
   notifyTerminalCommandSubmission,
   registerTerminalCommandSubmissionListener,
-} from '../../components/terminal/runtime/terminalCommandInjectionReadyRegistry';
+} from './terminalCommandSubmissionRegistry';
 
 test('shared backend invalidates relative UI before SFTP, snippet and typed submissions reach the bridge', () => {
   let backend!: ReturnType<typeof useTerminalBackend>;

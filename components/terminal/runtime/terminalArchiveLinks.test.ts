@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ILink, ILinkProvider, Terminal } from '@xterm/xterm';
 import { registerTerminalArchiveLinks } from './terminalArchiveLinks';
-import { notifyTerminalCommandSubmission } from './terminalCommandInjectionReadyRegistry';
+import { notifyTerminalCommandSubmission } from '../../../application/state/terminalCommandSubmissionRegistry';
 
 function fixture() {
   let provider!: ILinkProvider;

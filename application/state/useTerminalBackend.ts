@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { netcattyBridge } from "../../infrastructure/services/netcattyBridge";
 import type { TerminalSessionExitEvent } from "./resolveTerminalSessionExitIntent";
-import { notifyTerminalCommandSubmission } from "../../components/terminal/runtime/terminalCommandInjectionReadyRegistry";
+import { notifyTerminalCommandSubmission } from "./terminalCommandSubmissionRegistry";
 
 type PluginConnectionStartOptions = NetcattyPluginConnectionStartRequest & {
   signal?: AbortSignal;

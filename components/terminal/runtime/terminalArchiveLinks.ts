@@ -1,7 +1,7 @@
 import type { IDisposable, ILink, Terminal } from '@xterm/xterm';
 import { findTerminalArchives } from '../../../domain/terminalArchives';
 import { pluginTerminalCellRange, readPluginTerminalBufferText } from '../pluginTerminalBufferText';
-import { registerTerminalCommandSubmissionListener } from './terminalCommandInjectionReadyRegistry';
+import { registerTerminalCommandSubmissionListener } from '../../../application/state/terminalCommandSubmissionRegistry';
 
 /** Archive commands are prepared only at an empty shell prompt, never submitted. */
 export function registerTerminalArchiveLinks(options: {
