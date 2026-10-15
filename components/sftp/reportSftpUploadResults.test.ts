@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { reportSftpUploadResults } from "./reportSftpUploadResults.ts";
+import { SFTP_VIRTUAL_FOLDER_UPLOAD_ERROR } from "../../domain/sftpVirtualDrop";
 
 const t = (key: string, params?: Record<string, string | number>) => {
   if (key === "sftp.upload.partialSuccess") {
@@ -116,4 +117,25 @@ test("partial terminal drop success names the exact remote destination", () => {
     type: "info",
     message: "partial 1/1 (/srv/releases)",
   });
+});
+
+test("replaces the virtual archive-folder sentinel with a localized message", () => {
+  const calls: Array<{ type: string; message: string }> = [];
+  reportSftpUploadResults({
+    results: [
+      { fileName: "folder", success: false, error: SFTP_VIRTUAL_FOLDER_UPLOAD_ERROR },
+    ],
+    t,
+    toast: {
+      success: (message) => calls.push({ type: "success", message }),
+      error: (message) => calls.push({ type: "error", message }),
+      info: (message) => calls.push({ type: "info", message }),
+    },
+  });
+
+  assert.equal(calls[0]?.type, "error");
+  assert.equal(
+    calls[0]?.message,
+    "sftp.error.uploadFailed: folder - sftp.upload.virtualFolderError",
+  );
 });

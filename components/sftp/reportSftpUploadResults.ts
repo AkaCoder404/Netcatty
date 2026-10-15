@@ -1,3 +1,4 @@
+import { isSftpVirtualFolderUploadError } from "../../domain/sftpVirtualDrop";
 import type { UploadResult } from "../../lib/uploadService.types";
 
 export type ReportSftpUploadResultsOptions = {
@@ -38,7 +39,12 @@ export function reportSftpUploadResults({
 
   if (failed.length > 0) {
     for (const item of failed) {
-      const errorMsg = item.error ? ` - ${item.error}` : "";
+      // Virtual archive-folder drags store a sentinel; replace it with the
+      // localized, actionable message instead of the raw marker.
+      const rawError = isSftpVirtualFolderUploadError(item.error)
+        ? t("sftp.upload.virtualFolderError")
+        : item.error;
+      const errorMsg = rawError ? ` - ${rawError}` : "";
       toast.error(
         `${t("sftp.error.uploadFailed")}: ${item.fileName || t("sftp.upload")}${errorMsg}`,
         "SFTP",
