@@ -24,6 +24,7 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
     if (protocol === 'local') {
       const options = {
         hostname: host.hostname,
+        username: '',
         localShell: host.localShell || undefined,
         // undefined lets the backend choose login arguments; [] explicitly does not.
         localShellArgs: host.localShellArgs,
