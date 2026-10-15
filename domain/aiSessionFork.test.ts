@@ -282,3 +282,14 @@ test('one-pass fork eligibility matches clicked-boundary validation', () => {
   const orphan = session([msg({ role: 'tool', toolResults: [{ toolCallId: 'orphan' }] }), msg({ content: 'reply' })]);
   assert.equal(getForkableMessageIds(orphan).size, 0);
 });
+
+test('fork removes bare output identifiers in transcript previews while preserving JSON', () => {
+  const assistant = msg({ content: 'Read tool-output-source with tool_output_read', thinking: 'Output tool-output-source is saved', toolResults: [{ toolCallId: 'call', content: '{"handleId":"tool-output-source","preview":"Read tool-output-source"}' }] });
+  const plan = planSessionFork(session([msg({ toolCalls: [{ id: 'call' }] }), assistant]), assistant.id);
+  assert.ok(plan.ok);
+  assert.doesNotMatch(JSON.stringify(plan.messages), /tool-output-source/);
+  const parsed = JSON.parse(plan.messages[1].toolResults![0].content!);
+  assert.equal(parsed.handleId, null);
+  assert.match(parsed.preview, /Read/);
+  assert.match(assistant.content, /tool-output-source/);
+});

@@ -157,7 +157,8 @@ function validateToolCallResultPairing(
 function stripSourceOutputHandles(value: string): string {
   return value
     .replace(/\bhandleId=tool-output-[A-Za-z0-9-]+/g, '[saved output remains in the original chat]')
-    .replace(/"handleId"\s*:\s*"tool-output-[A-Za-z0-9-]+"/g, '"handleId":null,"note":"Saved output remains in the original chat"');
+    .replace(/"handleId"\s*:\s*"tool-output-[A-Za-z0-9-]+"/g, '"handleId":null,"note":"Saved output remains in the original chat"')
+    .replace(/\btool-output-[A-Za-z0-9-]+/g, '[saved output remains in the original chat]');
 }
 
 export function stripMessageContinuationState<M extends ForkMessageLike>(message: M): M {
