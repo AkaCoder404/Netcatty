@@ -283,8 +283,13 @@ function buildPosixWrapperBody(command, marker, startFormat, { omitBashHistoryCl
   // with empty), silence it for every wrapper read, and restore it after the
   // wrapper group finishes. zsh/dash/fish have no PS0, so both guards are
   // no-ops there.
-  const ps0Save = '[ -n "${PS0-}" ]&&{ __NCMCP_PS0=${PS0-}; PS0=; }';
-  const ps0Restore = '[ -n "${__NCMCP_PS0-}" ]&&{ PS0=${__NCMCP_PS0-}; unset __NCMCP_PS0; }';
+  // Ownership bookkeeping instead of a bare scratch value: a session that
+  // already defines its own `__NCMCP_PS0*` variables must never have them
+  // read into PS0, overwritten, or deleted, and the restore below only fires
+  // when this wrapper (or an interrupted earlier wrapper, which the next run
+  // then heals) actually saved a value.
+  const ps0Save = '[ -n "${PS0-}" ]&&{ __NCMCP_PS0_VAL=${PS0-}; __NCMCP_PS0_OWN=1; PS0=; }';
+  const ps0Restore = '[ "${__NCMCP_PS0_OWN-}" = 1 ]&&{ PS0=${__NCMCP_PS0_VAL-}; unset __NCMCP_PS0_OWN __NCMCP_PS0_VAL; }';
   // OpenWrt builds BusyBox with a 512-byte interactive line editor. Keep
   // every physical line below that limit, even for short user commands.
   // Emit a short standalone input marker before the shell reads any PS2

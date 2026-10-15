@@ -975,10 +975,10 @@ test("posix wrapper keeps cd contained in the subshell (documented trade-off)", 
 test("posix wrapper saves PS0 before wrapping and restores it after execution", () => {
   const marker = "__NCMCP_TEST__";
   const wrapped = buildWrappedCommand("echo PS0_HOOK_TEST", "posix", marker);
-  assert.match(wrapped, /\[ -n "\$\{PS0-\}" \]&&\{ __NCMCP_PS0=\$\{PS0-\}; PS0=; \}; printf/);
+  assert.match(wrapped, /\[ -n "\$\{PS0-\}" \]&&\{ __NCMCP_PS0_VAL=\$\{PS0-\}; __NCMCP_PS0_OWN=1; PS0=; \}; printf/);
   assert.match(
     wrapped,
-    /\[ -n "\$\{__NCMCP_PS0-\}" \]&&\{ PS0=\$\{__NCMCP_PS0-\}; unset __NCMCP_PS0; \}; \(exit \$__NCMCP_rc\); \}/,
+    /\[ "\$\{__NCMCP_PS0_OWN-\}" = 1 \]&&\{ PS0=\$\{__NCMCP_PS0_VAL-\}; unset __NCMCP_PS0_OWN __NCMCP_PS0_VAL; \}; \(exit \$__NCMCP_rc\); \}/,
   );
 
   const result = spawnSync(
@@ -994,6 +994,66 @@ test("posix wrapper saves PS0 before wrapping and restores it after execution", 
   // The user's PS0 value is back once the wrapper group finishes, so their
   // own subsequent commands still run the hook.
   assert.match(result.stdout, /RESTORED_PS0=\[hook\] /);
+});
+
+// Codex review: a session whose bashrc defines its own `__NCMCP_PS0` (even a
+// readonly one) must keep that variable intact — the wrapper's scratch state
+// is namespaced and gated on its own ownership flag, so a pre-existing
+// `__NCMCP_PS0` is neither overwritten on save nor mistaken for saved wrapper
+// state (assigned to PS0 and deleted) on restore.
+test("posix wrapper does not clobber a user-defined __NCMCP_PS0 variable", () => {
+  const marker = "__NCMCP_TEST__";
+  const wrapped = buildWrappedCommand("echo USER_VAR_TEST", "posix", marker);
+  const result = spawnSync(
+    "bash",
+    ["--norc", "-c", '__NCMCP_PS0="user-data"\n' + wrapped + 'printf "USER_V=[%s]\\n" "${__NCMCP_PS0-}"'],
+    { encoding: "utf8" },
+  );
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, new RegExp(`${marker}_E:0`));
+  assert.match(result.stdout, /USER_VAR_TEST/);
+  const userVarLine = result.stdout.split("\n").find((line) => line.startsWith("USER_V="));
+  assert.equal(userVarLine, "USER_V=[user-data]");
+});
+
+test("posix wrapper survives a readonly user __NCMCP_PS0 without restore errors", () => {
+  const marker = "__NCMCP_TEST__";
+  const wrapped = buildWrappedCommand("echo READONLY_USER_TEST", "posix", marker);
+  const result = spawnSync(
+    "bash",
+    ["--norc", "-c", 'PS0="[hook] "\nreadonly __NCMCP_PS0="pinned"\n' + wrapped + 'printf "PIN=[%s] PS0=[%s]\\n" "${__NCMCP_PS0-}" "${PS0-}"'],
+    { encoding: "utf8" },
+  );
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, new RegExp(`${marker}_E:0`));
+  assert.match(result.stdout, /READONLY_USER_TEST/);
+  assert.equal(result.stderr, "");
+  const pinLine = result.stdout.split("\n").find((line) => line.startsWith("PIN="));
+  assert.equal(pinLine, "PIN=[pinned] PS0=[[hook] ]");
+});
+
+// An interrupted earlier run leaves its ownership flag and saved value behind
+// with PS0 cleared; the next wrapper run must restore the previously saved
+// value and clear the bookkeeping instead of leaving PS0 silenced forever.
+test("posix wrapper heals PS0 state left behind by an interrupted earlier run", () => {
+  const marker = "__NCMCP_TEST__";
+  const wrapped = buildWrappedCommand("echo HEAL_TEST", "posix", marker);
+  const result = spawnSync(
+    "bash",
+    ["--norc", "-c", 'unset PS0\n__NCMCP_PS0_VAL="[hook] "\n__NCMCP_PS0_OWN=1\n' + wrapped + 'printf "HEALED=[%s] OWN=[%s]\\n" "${PS0-}" "${__NCMCP_PS0_OWN-}"'],
+    { encoding: "utf8" },
+  );
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, new RegExp(`${marker}_E:0`));
+  assert.match(result.stdout, /HEAL_TEST/);
+  const healedLine = result.stdout.split("\n").find((line) => line.startsWith("HEALED="));
+  assert.equal(healedLine, "HEALED=[[hook] ] OWN=[]");
 });
 
 test("posix wrapper leaves PS0 alone when the user has none set", () => {
