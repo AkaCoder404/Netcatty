@@ -1,8 +1,10 @@
 import { resolveHostOs } from './host';
 import type { Host } from './models';
+import { isWslLocalShell } from '../lib/localShell';
 
 export function supportsTerminalArchiveCommands(host: Host, localPlatform: string): boolean {
-  if (host.protocol === 'local') return localPlatform === 'linux';
+  if (host.protocol === 'local') return localPlatform === 'linux'
+    || (localPlatform === 'win32' && isWslLocalShell(host.localShell));
   if (host.protocol && !['ssh', 'mosh', 'et'].includes(host.protocol)) return false;
   return host.deviceType !== 'network' && resolveHostOs(host) === 'linux';
 }

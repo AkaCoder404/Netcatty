@@ -960,6 +960,7 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
   term.loadAddon(webLinksAddon);
   const archiveLinks = registerTerminalArchiveLinks({
     term,
+    sessionId: ctx.sessionId,
     isEnabled: () => ctx.statusRef.current === 'connected'
       && !ctx.isBroadcastEnabledRef.current
       && supportsTerminalArchiveCommands(ctx.getHost?.() ?? ctx.host, platform),

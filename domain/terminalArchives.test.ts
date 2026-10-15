@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { findTerminalArchives, supportsTerminalArchiveCommands } from './terminalArchives';
 import type { Host } from './models';
+import { createHostTerminalSession } from '../application/state/sessionFactories';
+import { resolveTerminalSessionHost } from './terminalHostResolution';
 
 const host: Host = { id: 'test', label: 'Test', hostname: 'host', username: 'me', tags: [], os: 'linux' };
 
@@ -30,6 +32,21 @@ test('finite tar and zip formats prepare commands without Enter or source deleti
   ]);
   assert.deepEqual(findTerminalArchives('a.gz b.rar c.7z tool.exe https://host/a.zip'), []);
   assert.ok(commands.every(command => !/[\r\n]/u.test(command)));
+});
+
+test('Windows local archive support follows the launched WSL shell, not Linux icons or generic POSIX shells', () => {
+  for (const localShell of ['wsl', 'wsl.exe', 'wsl-ubuntu', 'C:\\Windows\\System32\\wsl.exe']) {
+    const launched: Host = { ...host, protocol: 'local', os: 'windows', localShell };
+    const session = createHostTerminalSession(`archive-${localShell}`, launched);
+    const resolved = resolveTerminalSessionHost({
+      session, hosts: [{ ...launched, localShell: 'powershell.exe' }],
+      groupConfigs: [], proxyProfiles: [], localOs: 'windows',
+    });
+    assert.equal(supportsTerminalArchiveCommands(resolved, 'win32'), true, localShell);
+  }
+  for (const localShell of ['', 'powershell.exe', 'cmd.exe', 'git-bash', 'cygwin', 'C:\\msys64\\usr\\bin\\bash.exe']) {
+    assert.equal(supportsTerminalArchiveCommands({ ...host, protocol: 'local', localShell }, 'win32'), false, localShell);
+  }
 });
 
 test('quoted filenames, Unicode and leading options remain literal shell arguments', () => {

@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { netcattyBridge } from "../../infrastructure/services/netcattyBridge";
 import type { TerminalSessionExitEvent } from "./resolveTerminalSessionExitIntent";
+import { notifyTerminalCommandSubmission } from "../../components/terminal/runtime/terminalCommandInjectionReadyRegistry";
 
 type PluginConnectionStartOptions = NetcattyPluginConnectionStartRequest & {
   signal?: AbortSignal;
@@ -211,6 +212,7 @@ export const useTerminalBackend = () => {
 
   const writeToSession = useCallback((sessionId: string, data: string, options?: Parameters<NonNullable<NetcattyBridge["writeToSession"]>>[2]) => {
     const bridge = netcattyBridge.get();
+    if (bridge?.writeToSession) notifyTerminalCommandSubmission(sessionId, data);
     bridge?.writeToSession?.(sessionId, data, options);
   }, []);
 

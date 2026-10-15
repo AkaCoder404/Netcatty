@@ -2,25 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ILink, ILinkProvider, Terminal } from '@xterm/xterm';
 import { registerTerminalArchiveLinks } from './terminalArchiveLinks';
+import { notifyTerminalCommandSubmission } from './terminalCommandInjectionReadyRegistry';
 
 function fixture() {
   let provider!: ILinkProvider;
   let text = 'backup.tar.gz';
   let enabled = true, ready = true, registrationDisposed = false, wrapped = false;
   const pasted: string[] = [];
-  let submitted: (data: string) => void = () => {};
   let markerLine = -1;
   const term = {
     buffer: { active: { getLine: (y: number) => y === 0 ? { translateToString: () => text, isWrapped: wrapped } : undefined } },
     paste: (value: string) => { pasted.push(value); ready = false; },
     focus: () => {},
     registerMarker: () => ({ line: markerLine, isDisposed: false, dispose() { this.isDisposed = true; } }),
-    onData: (listener: (data: string) => void) => { submitted = listener; return { dispose() {} }; },
     registerLinkProvider: (next: ILinkProvider) => { provider = next; return { dispose: () => { registrationDisposed = true; } }; },
   };
-  const registration = registerTerminalArchiveLinks({ term: term as unknown as Terminal, isEnabled: () => enabled, isInputReady: () => ready });
+  const registration = registerTerminalArchiveLinks({ term: term as unknown as Terminal, sessionId: 'archive-test', isEnabled: () => enabled, isInputReady: () => ready });
   const links = () => { let value: ILink[] | undefined; provider.provideLinks(1, result => { value = result; }); return value; };
-  return { links, pasted, registration, submit: () => { markerLine = 0; submitted('\r'); }, setText: (value: string) => { text = value; }, setReady: (value: boolean) => { ready = value; }, setEnabled: (value: boolean) => { enabled = value; }, setWrapped: () => { wrapped = true; }, isDisposed: () => registrationDisposed };
+  return { links, pasted, registration, submit: () => { markerLine = 0; notifyTerminalCommandSubmission('archive-test', '\r'); }, setText: (value: string) => { text = value; }, setReady: (value: boolean) => { ready = value; }, setEnabled: (value: boolean) => { enabled = value; }, setWrapped: () => { wrapped = true; }, isDisposed: () => registrationDisposed };
 }
 
 const ctrlClick = { button: 0, ctrlKey: true } as MouseEvent;

@@ -1,10 +1,12 @@
 import type { IDisposable, ILink, Terminal } from '@xterm/xterm';
 import { findTerminalArchives } from '../../../domain/terminalArchives';
 import { pluginTerminalCellRange, readPluginTerminalBufferText } from '../pluginTerminalBufferText';
+import { registerTerminalCommandSubmissionListener } from './terminalCommandInjectionReadyRegistry';
 
 /** Archive commands are prepared only at an empty shell prompt, never submitted. */
 export function registerTerminalArchiveLinks(options: {
   term: Terminal;
+  sessionId: string;
   isEnabled: () => boolean;
   isInputReady: () => boolean;
 }): IDisposable {
@@ -13,8 +15,7 @@ export function registerTerminalArchiveLinks(options: {
   // Relative names belong only to output from the latest submitted command.
   // A marker follows scrollback trimming without keeping a cwd history.
   let commandStart = term.registerMarker(0);
-  const submission = term.onData(data => {
-    if (!/[\r\n]/u.test(data)) return;
+  const disposeSubmission = registerTerminalCommandSubmissionListener(options.sessionId, () => {
     commandStart?.dispose();
     commandStart = term.registerMarker(0);
   });
@@ -57,5 +58,5 @@ export function registerTerminalArchiveLinks(options: {
       callback(links);
     },
   });
-  return { dispose() { disposed = true; submission.dispose(); commandStart?.dispose(); registration.dispose(); } };
+  return { dispose() { disposed = true; disposeSubmission(); commandStart?.dispose(); registration.dispose(); } };
 }
