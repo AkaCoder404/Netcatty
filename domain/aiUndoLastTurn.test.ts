@@ -4,7 +4,6 @@ import test from 'node:test';
 import type { AISession, ChatMessage } from '../infrastructure/ai/types.ts';
 import {
   buildUndoLastTurnBranch,
-  collectRetainedToolOutputHandleIds,
   hasUnresolvedToolCalls,
   resolveUndoLastTurnBoundary,
 } from './aiUndoLastTurn.ts';
@@ -133,42 +132,6 @@ test('buildUndoLastTurnBranch restores message attachments into composer uploads
   ]);
 });
 
-test('collectRetainedToolOutputHandleIds scans structured tool-call arguments and compaction', () => {
-  const messages: ChatMessage[] = [
-    { id: 'u1', role: 'user', content: 'read the tail please', timestamp: 1 },
-    {
-      id: 'a1',
-      role: 'assistant',
-      content: '',
-      timestamp: 2,
-      // A failed read whose error result does not echo the requested id:
-      // the call arguments are the only surviving reference to the handle.
-      toolCalls: [
-        {
-          id: 'call-1',
-          name: 'tool_output_read',
-          arguments: { handleId: 'tool-output-arg-1', options: { head: 1 } },
-        },
-      ],
-      toolResults: [{ toolCallId: 'call-1', content: 'error: handle not found' }],
-    },
-    { id: 'a2', role: 'assistant', content: 'archived handleId=tool-output-inline-1', timestamp: 3 },
-  ];
-  const ids = collectRetainedToolOutputHandleIds(
-    messages,
-    { summary: 'summary with handleId=tool-output-compaction-1', compactedMessageCount: 1 },
-  );
-  assert.ok(ids.has('tool-output-arg-1'));
-  assert.ok(ids.has('tool-output-inline-1'));
-  assert.ok(ids.has('tool-output-compaction-1'));
-
-  // No tool calls and no embedded references: nothing collected.
-  assert.deepEqual(
-    collectRetainedToolOutputHandleIds([{ id: 'u', role: 'user', content: 'plain', timestamp: 4 }]),
-    new Set(),
-  );
-});
-
 test('buildUndoLastTurnBranch restores the undone turn selected user skills', () => {
   const source = session([
     user('first'),
@@ -249,4 +212,34 @@ test('buildUndoLastTurnBranch keeps the title when a user message is retained', 
   // The retained prefix still contains a user message, so the source title
   // keeps describing the branch's conversation.
   assert.equal(result?.session.title, 'renamed by user');
+});
+
+test('undo allows a failed last reply while retaining portable replay metadata', () => {
+  const continuation = { reasoningParts: [{ text: 'checked', providerOptions: { anthropic: { signature: 'signed-thinking' } } }] };
+  const source = session([
+    user('first'),
+    assistant('first answer', { providerContinuation: continuation }),
+    user('retry this request'),
+    assistant('request failed', { executionStatus: 'failed' }),
+  ], { externalSessionId: 'original-provider-thread' });
+  const result = buildUndoLastTurnBranch(source, { newId: 'branch', now: 99 });
+  assert.ok(result);
+  assert.deepEqual(result.session.messages[1].providerContinuation, continuation);
+  assert.equal(result.session.externalSessionId, undefined);
+  assert.equal(result.restored.text, 'retry this request');
+  assert.equal(source.messages.length, 4);
+});
+
+test('safe boundary does not pair a reused call ID with an earlier result', () => {
+  const prefix = [
+    assistant('first call', { toolCalls: [{ id: 'reused', name: 'terminal_execute', arguments: {} }] }),
+    assistant('first result', { toolResults: [{ toolCallId: 'reused', content: 'done' }] }),
+    assistant('second call', { toolCalls: [{ id: 'reused', name: 'terminal_execute', arguments: {} }] }),
+  ];
+  assert.equal(resolveUndoLastTurnBoundary([...prefix, user('latest')]), null);
+  assert.equal(resolveUndoLastTurnBoundary([
+    ...prefix,
+    assistant('second result', { toolResults: [{ toolCallId: 'reused', content: 'done again' }] }),
+    user('latest'),
+  ]), 4);
 });

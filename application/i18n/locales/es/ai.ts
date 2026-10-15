@@ -514,7 +514,7 @@ export const esAiMessages: Messages = {
   'ai.chat.daysAgo': 'hace {n} d',
   'ai.chat.newChat': 'Nuevo chat',
   'ai.chat.undoLastTurn': 'Deshacer el último turno',
-  'ai.chat.undoLastTurnNotice': "Último turno deshecho en un chat derivado. Los efectos de herramientas ya ejecutadas (comandos, cambios de archivos) no se revierten.",
+  'ai.chat.undoLastTurnNotice': "Se conserva el chat original. Los comandos y cambios de archivos no se deshacen. Consulta allí las salidas completas guardadas y las tareas en segundo plano existentes.",
   'ai.chat.allSessions': 'Todas las sesiones',
   'ai.chat.loadEarlierMessages': 'Cargar mensajes anteriores ({n} más)',
   'ai.chat.jumpNav': 'Ir al mensaje',

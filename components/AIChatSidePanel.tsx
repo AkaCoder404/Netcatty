@@ -321,7 +321,7 @@ const AIChatSidePanelActive: React.FC<AIChatSidePanelProps> = ({
 
   const [showHistory, setShowHistory] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  // Undo-last-turn (including its durable alias materialization) is still
+  // Undo-last-turn is still
   // running. Unlike the send flow this is not reflected in `isSending`, so it
   // is tracked separately to block sends until the branch settles: a turn
   // submitted meanwhile would run against the (soon hidden) source session.
@@ -844,8 +844,7 @@ const AIChatSidePanelActive: React.FC<AIChatSidePanelProps> = ({
     const sessionId = activeSessionRef.current?.id;
     if (!sessionId || !undoLastTurnInSession) return;
     if (isStreaming || isAIChatSessionStreaming(sessionId)) return;
-    // Serialize: while a branch (including its durable alias materialization)
-    // is still being created, `canUndoLastTurn` stays stale, so a quick second
+    // Serialize: while a branch is still being created, `canUndoLastTurn` stays stale, so a quick second
     // click must not start a parallel undo of the same session — that would
     // publish duplicate branches and restore the same prompt twice.
     if (undoInFlightRef.current) return;
@@ -1394,8 +1393,7 @@ const AIChatSidePanelActive: React.FC<AIChatSidePanelProps> = ({
     }));
     const hasInlineTextAttachments = attachments.some(isInlineTextAttachment);
     if ((!trimmed && !hasInlineTextAttachments) || isStreaming) return;
-    // While undo-last-turn is creating the branch (including its durable
-    // alias materialization) the target session is still the source one; a
+    // While undo-last-turn is creating the branch, the target is still the source; a
     // turn submitted now would run in the soon-hidden source session, so
     // block it until the branch settles.
     if (isUndoingLastTurn) return;

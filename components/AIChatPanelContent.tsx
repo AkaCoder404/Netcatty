@@ -244,6 +244,7 @@ export const AIChatPanelContent: React.FC<AIChatPanelContentProps> = ({
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6 rounded-md text-muted-foreground/62 hover:bg-white/[0.05] hover:text-foreground"
+                      aria-label={t('ai.chat.undoLastTurn')}
                       disabled={sending || isStreaming || !canUndoLastTurn}
                       onClick={handleUndoLastTurn}
                     >
