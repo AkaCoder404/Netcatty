@@ -563,10 +563,20 @@ function startPtyJob(ptyStream, command, options) {
     // `osc3008Tail` is reset at the start of every input delivery.
     if (deliveringInput) {
       const osc3008Needle = "\x1b]3008;";
-      if (!inputDeliverySawOsc3008 && (osc3008Tail + text).includes(osc3008Needle)) {
+      const combined = osc3008Tail + text;
+      if (!inputDeliverySawOsc3008 && combined.includes(osc3008Needle)) {
         inputDeliverySawOsc3008 = true;
       }
-      osc3008Tail = text.slice(-(osc3008Needle.length - 1));
+      // Retain up to needle.length - 1 chars from the *combined* text so a
+      // sequence split across any number of callbacks (not just two) still
+      // reassembles; building the suffix from `text` alone would drop bytes
+      // retained from earlier callbacks.
+      osc3008Tail = combined.slice(-(osc3008Needle.length - 1));
+      // Any PTY output while a recovery Enter is pending means the shell is
+      // still streaming data — see the recovery note in writeInput.
+      if (osc3008RecoveryPending) {
+        osc3008RecoveryOutputSeen = true;
+      }
     }
 
     if (probingShell) {
@@ -778,8 +788,11 @@ function startPtyJob(ptyStream, command, options) {
   // input delivery was still being typed (see the PS0/OSC 3008 note in onData).
   let inputDeliverySawOsc3008 = false;
   // Retained suffix of the last decoded PTY chunk, so an escape sequence split
-  // across two data callbacks is still detected during typed delivery.
+  // across any number of data callbacks is still detected during typed delivery.
   let osc3008Tail = "";
+  // Recovery Enter state: see armOsc3008RecoveryEnter in writeInput.
+  let osc3008RecoveryPending = false;
+  let osc3008RecoveryOutputSeen = false;
   function stopInputWrite() {
     inputWriteGeneration += 1;
     clearTimeout(inputWriteTimer);
@@ -794,9 +807,67 @@ function startPtyJob(ptyStream, command, options) {
     // so paced typing time never consumes the startup budget.
     if (!finished && !cancelRequested && generation === inputWriteGeneration) {
       deliveringInput = false;
+      osc3008RecoveryPending = false;
       if (!pendingEnd) armOutputTimeout();
       if (!foundStart) armStartupTimeout();
     }
+  }
+
+  // Recovery window pacing. QUIET is one input pacing window: the Enter is
+  // only sent after the PTY has stayed silent that long. MAX bounds the whole
+  // recovery so a continuously chatty PTY (e.g. a tail -f tab) cannot postpone
+  // the recovery forever — the payload must still be submitted.
+  const OSC3008_RECOVERY_QUIET_MS = 30;
+  const OSC3008_RECOVERY_MAX_MS = 1000;
+  function armOsc3008RecoveryEnter(generation, isCurrent) {
+    // Recovery must wait for positive evidence rather than a blind 30ms
+    // timeout: on sessions whose output return latency exceeds the pacing
+    // window, the payload may already be committed with its _S start marker
+    // still in flight, and an extra Enter then would be consumed by the
+    // foreground command's stdin. A committed submit always produces output —
+    // the echoed newline / redraw, further bypass OSC chunks, or the wrapper's
+    // own _S marker — so PTY output while it is in flight is evidence the
+    // submission is resolving on its own, and onData records that activity via
+    // osc3008RecoveryOutputSeen. The Enter is sent only once the PTY has been
+    // quiet for a full pacing window (nothing left to resolve), or when the
+    // hard cap expires on a chatty PTY that never goes quiet. foundStart
+    // always cancels the recovery immediately: the wrapper's own final newline
+    // already committed the payload.
+    osc3008RecoveryPending = true;
+    osc3008RecoveryOutputSeen = false;
+    const maxQuietRounds = Math.max(1, Math.ceil(OSC3008_RECOVERY_MAX_MS / OSC3008_RECOVERY_QUIET_MS));
+    const writeRecoveryNewline = () => {
+      osc3008RecoveryPending = false;
+      try {
+        ptyStream.write("\n");
+      } catch (error) {
+        finish(preStartOutput, -1, `Terminal input failed: ${error.message}`);
+        return;
+      }
+      completeInputDelivery(generation);
+    };
+    const attempt = (roundsLeft) => {
+      inputWriteTimer = setTimeout(() => {
+        if (!isCurrent()) {
+          osc3008RecoveryPending = false;
+          return;
+        }
+        inputWriteTimer = null;
+        if (foundStart) {
+          osc3008RecoveryPending = false;
+          completeInputDelivery(generation);
+          return;
+        }
+        if (osc3008RecoveryOutputSeen && roundsLeft > 0) {
+          // Commit evidence is still in flight; wait for the next quiet window.
+          osc3008RecoveryOutputSeen = false;
+          attempt(roundsLeft - 1);
+          return;
+        }
+        writeRecoveryNewline();
+      }, OSC3008_RECOVERY_QUIET_MS);
+    };
+    attempt(maxQuietRounds);
   }
 
   function writeInput(text) {
@@ -808,6 +879,8 @@ function startPtyJob(ptyStream, command, options) {
     deliveringInput = true;
     inputDeliverySawOsc3008 = false;
     osc3008Tail = "";
+    osc3008RecoveryPending = false;
+    osc3008RecoveryOutputSeen = false;
     const generation = inputWriteGeneration;
 
     // Keep each write to one Unicode code point for strict bastions, while
@@ -851,28 +924,8 @@ function startPtyJob(ptyStream, command, options) {
           // trailing newline may have been desynced and left the shell holding
           // the line uncommitted. Send one standalone Enter — as its own
           // write, kept out of the paced payload batch — so the typed command
-          // is always submitted. On shells that already committed the payload
-          // it just waits in the tty queue and prints one extra empty prompt
-          // afterwards.
-          inputWriteTimer = setTimeout(() => {
-            if (!isCurrent()) return;
-            inputWriteTimer = null;
-            // The start marker can arrive during this delay and proves the
-            // wrapper's own final newline already committed the payload; an
-            // extra Enter then would be consumed by the command's stdin, so
-            // finish delivery without it.
-            if (foundStart) {
-              completeInputDelivery(generation);
-              return;
-            }
-            try {
-              ptyStream.write("\n");
-            } catch (error) {
-              finish(preStartOutput, -1, `Terminal input failed: ${error.message}`);
-              return;
-            }
-            completeInputDelivery(generation);
-          }, 30);
+          // is always submitted.
+          armOsc3008RecoveryEnter(generation, isCurrent);
         }
         else completeInputDelivery(generation);
       } catch (error) {

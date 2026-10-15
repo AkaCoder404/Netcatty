@@ -130,3 +130,83 @@ test("OSC 3008 split across PTY chunks still triggers the standalone Enter", asy
   pty.emit("close");
   t.mock.timers.reset();
 });
+
+test("OSC 3008 split across three PTY chunks still triggers the standalone Enter", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { pty, writes } = makePty();
+  const job = startPtyJob(pty, COMMAND, {
+    shellKind: "posix", probeLiveShell: true, timeoutMs: 5000,
+  });
+  const totalLength = expectedDeliveryLength(job.marker);
+  t.mock.timers.tick(30);
+  pty.emit("data", `${job.marker}_P:sh\n${job.marker}_Q`);
+  let delivered = false;
+  // "\x1b]", "30" and "08;..." — the constant "\x1b]3008;" prefix itself
+  // spans three data callbacks; the retained suffix must survive every hop.
+  const three = [OSC_3008.slice(0, 2), OSC_3008.slice(2, 4), OSC_3008.slice(4)];
+  for (let i = 0; i < 4000; i += 1) {
+    t.mock.timers.tick(30);
+    if (i % 6 === 0) pty.emit("data", three[0]);
+    if (i % 6 === 1) pty.emit("data", three[1]);
+    if (i % 6 === 2) pty.emit("data", three[2]);
+    if (writes.join("").length >= totalLength) { delivered = true; break; }
+  }
+  assert.ok(delivered, "wrapper delivery completed");
+  // Stop emitting: the first quiet recovery window (after the chunk that
+  // landed alongside delivery completion is drained) must send the Enter.
+  let enterSent = false;
+  for (let i = 0; i < 10 && !enterSent; i += 1) {
+    t.mock.timers.tick(30);
+    enterSent = writes[writes.length - 1] === "\n";
+  }
+  assert.ok(enterSent, "a three-chunk split OSC 3008 sequence still latches the flag");
+  pty.emit("data", `${job.marker}_S\nout\n${job.marker}_E:0\n`);
+  assert.equal((await job.resultPromise).exitCode, 0);
+  pty.emit("close");
+  t.mock.timers.reset();
+});
+
+test("PTY output during the recovery window postpones the standalone Enter", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { pty, writes } = makePty();
+  const job = startPtyJob(pty, COMMAND, {
+    shellKind: "posix", probeLiveShell: true, timeoutMs: 5000,
+  });
+  await driveDelivery(t, pty, writes, job.marker, { osc: OSC_3008, finalTick: false });
+  // Output keeps flowing after the payload finished (echo of the submit /
+  // further OSC chunks): the recovery must not fire while it streams in.
+  pty.emit("data", OSC_3008);
+  t.mock.timers.tick(30);
+  assert.notEqual(writes[writes.length - 1], "\n", "output in flight postpones the Enter");
+  // One full quiet pacing window without any PTY output: the submission is
+  // not resolving on its own, so the recovery Enter is justified.
+  t.mock.timers.tick(30);
+  assert.equal(writes[writes.length - 1], "\n", "quiet window sends the recovery Enter");
+  pty.emit("data", `${job.marker}_S\nout\n${job.marker}_E:0\n`);
+  assert.equal((await job.resultPromise).exitCode, 0);
+  pty.emit("close");
+  t.mock.timers.reset();
+});
+
+test("a continuously chatty PTY cannot postpone the recovery Enter past the cap", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { pty, writes } = makePty();
+  const job = startPtyJob(pty, COMMAND, {
+    shellKind: "posix", probeLiveShell: true, timeoutMs: 5000,
+  });
+  await driveDelivery(t, pty, writes, job.marker, { osc: OSC_3008, finalTick: false });
+  // Output arriving during every recovery window: the cap (~1s) must still
+  // submit the payload eventually.
+  let enterSent = false;
+  for (let i = 0; i < 60 && !enterSent; i += 1) {
+    t.mock.timers.tick(15);
+    pty.emit("data", OSC_3008);
+    t.mock.timers.tick(15);
+    enterSent = writes[writes.length - 1] === "\n";
+  }
+  assert.ok(enterSent, "the recovery Enter is sent despite ongoing PTY output");
+  pty.emit("data", `${job.marker}_S\nout\n${job.marker}_E:0\n`);
+  assert.equal((await job.resultPromise).exitCode, 0);
+  pty.emit("close");
+  t.mock.timers.reset();
+});
