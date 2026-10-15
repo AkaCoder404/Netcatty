@@ -17,9 +17,11 @@ type HostOpenSessionReuseInput = {
   resolveEffectiveHost: (host: Host) => Host;
 };
 
+type OpeningConnection = { localHost: Host } | { key: Promise<string | undefined> };
+
 /** Retain the opening connection identity, never credentials in session storage. */
 export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, resolveEffectiveHost }: HostOpenSessionReuseInput) {
-  const openingKeys = useRef(new Map<string, Promise<string | undefined>>());
+  const openingKeys = useRef(new Map<string, OpeningConnection>());
   const connectionKey = useCallback((host: Host) => {
     const protocol = resolveEffectiveTerminalProtocol(host);
     if (protocol === 'local') {
@@ -97,7 +99,7 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
       if (!host) continue;
       try {
         const effectiveHost = resolveEffectiveHost(host);
-        openingKeys.current.set(session.id, connectionKey({
+        const openingHost = {
           ...effectiveHost,
           hostname: session.hostname,
           username: session.protocol === 'serial' ? resolveEffectiveHost(host).username : session.username,
@@ -110,9 +112,15 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
           localShell: session.localShell ?? effectiveHost.localShell,
           localShellArgs: session.localShellArgs ?? effectiveHost.localShellArgs,
           localStartDir: session.localStartDir ?? effectiveHost.localStartDir,
-        }).catch(() => undefined));
+        };
+        // Local IDs may only resolve after renderer discovery completes. Keep
+        // the opening settings so that later discovery can identify the same
+        // executable without replacing them with edited vault/global settings.
+        openingKeys.current.set(session.id, resolveEffectiveTerminalProtocol(openingHost) === 'local'
+          ? { localHost: openingHost }
+          : { key: connectionKey(openingHost).catch(() => undefined) });
       } catch {
-        openingKeys.current.set(session.id, Promise.resolve(undefined));
+        openingKeys.current.set(session.id, { key: Promise.resolve(undefined) });
       }
     }
   }, [sessions, hosts, connectionKey, resolveEffectiveHost]);
@@ -122,9 +130,16 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
     if (!host) return undefined;
     try {
       const requestedKey = await connectionKey(resolveEffectiveHost(host));
-      const matches = await Promise.all(sessions.map(async (session) => (
-        session.hostId === hostId && await openingKeys.current.get(session.id) === requestedKey ? session : undefined
-      )));
+      const matches = await Promise.all(sessions.map(async (session) => {
+        if (session.hostId !== hostId) return undefined;
+        const opening = openingKeys.current.get(session.id);
+        const openingKey = opening && ('localHost' in opening
+          // An explicit empty selector means backend default, not today's
+          // global setting. Nonempty captured IDs can safely resolve now.
+          ? connectionKey(opening.localHost.localShell ? resolveEffectiveHost(opening.localHost) : opening.localHost)
+          : opening.key);
+        return await openingKey === requestedKey ? session : undefined;
+      }));
       return findReusableHostSession(matches.filter((session) => session !== undefined), hostId);
     } catch {
       // An unresolved/changed credential must never select an old transport.

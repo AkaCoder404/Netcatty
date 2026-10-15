@@ -8,6 +8,7 @@ import { resolveEffectiveTerminalHost, resolveTerminalSessionHost } from '../../
 import { createHostTerminalSession } from './sessionFactories';
 import { resolveHostDefaultLocalShell } from '../../domain/localShellHost';
 import { useHostOpenSessionReuse } from './useHostOpenSessionReuse';
+import { resolveShellSetting } from '../../lib/useDiscoveredShells';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const effective = (host: Host) => host;
@@ -337,4 +338,46 @@ test('saved discovery IDs resolve before snapshot while backend default stays in
   const defaultLaunch = resolveEffectiveHost({ ...saved, localShell: undefined });
   assert.equal(defaultLaunch.localShell, '');
   assert.equal(defaultLaunch.localShellArgs, undefined);
+});
+
+for (const discovered of [
+  { id: 'bin-bash', name: 'Bash', command: '/bin/bash', args: ['-l'], icon: 'bash' },
+  { id: 'wsl-ubuntu', name: 'Ubuntu', command: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu'], icon: 'ubuntu' },
+]) {
+  for (const owner of ['saved', 'global'] as const) {
+    test(`cold ${owner} ${discovered.id} reuses after discovery without masking edits`, async (t) => {
+      const settings = { localShell: discovered.id, localStartDir: '/project-a' };
+      const original = host({ protocol: 'local', hostname: 'localhost', ...(owner === 'saved' ? settings : {}) });
+      const context = { terminalSettings: settings, discoveredShells: [] as DiscoveredShell[], resolveShellSetting };
+      const resolveEffectiveHost = (candidate: Host) => resolveHostDefaultLocalShell(candidate, context);
+      const launched = { ...createHostTerminalSession('cold', resolveEffectiveHost(original)), status: 'connected' as const };
+      assert.equal(launched.localShell, discovered.id);
+      const api = await harness(original, { sessions: [launched], resolveEffectiveHost });
+      t.after(api.close);
+      assert.equal((await api.find())?.sessionId, launched.id);
+      context.discoveredShells = [discovered];
+      await api.update({ host: { ...original } });
+      assert.equal((await api.find())?.sessionId, launched.id, 'discovery resolves the same executable and default arguments');
+      const edited = { ...original, localShell: discovered.command, localShellArgs: ['--edited'], localStartDir: '/project-b' };
+      await api.update({ host: edited });
+      assert.equal(await api.find(), undefined, 'a real path/argument/directory edit still opens a new session');
+      const copy = resolveTerminalSessionHost({ session: launched, hosts: [edited], groupConfigs: [], proxyProfiles: [], localOs: 'linux', defaultLocalShell: context });
+      assert.equal(copy.localShell, discovered.id);
+      assert.deepEqual(copy.localShellArgs, []);
+      assert.equal(copy.localStartDir, '/project-a');
+    });
+  }
+}
+
+test('discovery does not replace an explicit executable or its custom arguments with an alias', async (t) => {
+  const original = host({ protocol: 'local', hostname: 'localhost', localShell: '/bin/bash', localShellArgs: ['--norc'] });
+  const context = { discoveredShells: [] as DiscoveredShell[], resolveShellSetting };
+  const resolveEffectiveHost = (candidate: Host) => resolveHostDefaultLocalShell(candidate, context);
+  const api = await harness(original, { resolveEffectiveHost });
+  t.after(api.close);
+  context.discoveredShells = [{ id: 'bin-bash', name: 'Bash', command: '/bin/bash', args: ['-l'], icon: 'bash' }];
+  await api.update({ host: { ...original } });
+  assert.equal((await api.find())?.sessionId, 'tab');
+  await api.update({ host: { ...original, localShell: 'bin-bash', localShellArgs: undefined } });
+  assert.equal(await api.find(), undefined, 'selecting discovered login defaults changes the actual launch');
 });
