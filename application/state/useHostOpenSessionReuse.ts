@@ -4,6 +4,7 @@ import { findReusableHostSession } from '../../domain/hostOpenSession';
 import { resolveTelnetPassword, resolveTelnetPort, resolveTelnetUsername } from '../../domain/host';
 import { isEncryptedCredentialPlaceholder, sanitizeCredentialValue } from '../../domain/credentials';
 import { resolveEffectiveTerminalProtocol } from '../../domain/terminalProtocol';
+import { findIncompleteProxyIdentityId, findMissingProxyIdentityId, hasUsableProxyConfig } from '../../domain/proxyProfiles';
 import { buildSftpHostCredentials } from './sftp/useSftpHostCredentials';
 import { buildTransferPoolKey } from './sftp/transferConnectionPool';
 import { createHostTerminalSession } from './sessionFactories';
@@ -33,6 +34,13 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
       return buildTransferPoolKey({ hostname: host.hostname, hostId: host.id, protocol, connectionOptions: options });
     }
     if (protocol === 'telnet') {
+      // The actual Telnet starter rejects these settings before connecting.
+      if ((host.proxyProfileId && !host.proxyConfig)
+        || findMissingProxyIdentityId(host.proxyConfig, identities)
+        || findIncompleteProxyIdentityId(host.proxyConfig, identities)
+        || hasUsableProxyConfig(host.proxyConfig)) {
+        throw new Error('Telnet proxy configuration cannot be used');
+      }
       // Match the actual Telnet starter, including explicit empty overrides.
       const identity = host.telnetIdentityId ? identities.find((item) => item.id === host.telnetIdentityId) : undefined;
       if (host.telnetIdentityId && (!identity?.username?.trim() || identity.password === undefined)) {

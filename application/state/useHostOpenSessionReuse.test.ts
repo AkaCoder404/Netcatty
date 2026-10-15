@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import type { Host, Identity, SSHKey, TerminalSession } from '../../domain/models';
+import type { GroupConfig, Host, Identity, SSHKey, TerminalSession } from '../../domain/models';
 import { updateRestoredSessionStatusState } from './sessionRestoreState';
-import { resolveTerminalSessionHost } from '../../domain/terminalHostResolution';
+import { resolveEffectiveTerminalHost, resolveTerminalSessionHost } from '../../domain/terminalHostResolution';
 import { createHostTerminalSession } from './sessionFactories';
 import { useHostOpenSessionReuse } from './useHostOpenSessionReuse';
 
@@ -14,14 +14,14 @@ const host = (extra: Partial<Host> = {}): Host => ({
   id: 'host', hostname: 'original.invalid', username: 'user', label: 'Original', os: 'linux', tags: [], protocol: 'ssh', ...extra,
 });
 
-async function harness(initial: Host, extra: { hosts?: Host[]; keys?: SSHKey[]; identities?: Identity[]; sessions?: TerminalSession[] } = {}) {
+async function harness(initial: Host, extra: { hosts?: Host[]; keys?: SSHKey[]; identities?: Identity[]; sessions?: TerminalSession[]; resolveEffectiveHost?: (host: Host) => Host } = {}) {
   let hosts = [initial, ...(extra.hosts ?? [])];
   let keys = extra.keys ?? [];
   let identities = extra.identities ?? [];
   let sessions: TerminalSession[] = extra.sessions ?? [{ ...createHostTerminalSession('tab', initial), status: 'connected' }];
   let find: ReturnType<typeof useHostOpenSessionReuse>;
   function Harness() {
-    find = useHostOpenSessionReuse({ sessions, hosts, keys, identities, resolveEffectiveHost: effective });
+    find = useHostOpenSessionReuse({ sessions, hosts, keys, identities, resolveEffectiveHost: extra.resolveEffectiveHost ?? effective });
     return null;
   }
   let renderer: ReactTestRenderer;
@@ -239,4 +239,36 @@ test('local default shell and cwd treat empty values as omitted but explicit emp
   assert.equal((await api.find())?.sessionId, 'tab');
   await api.update({ host: { ...original, localShellArgs: [] } });
   assert.equal(await api.find(), undefined, 'empty args bypass backend login-shell defaults');
+});
+
+for (const [label, proxy] of [
+  ['a missing saved profile', { proxyProfileId: 'missing-profile' }],
+  ['a usable proxy', { proxyConfig: { type: 'socks5', host: 'proxy.invalid', port: 1080 } }],
+  ['a missing proxy identity', { proxyConfig: { type: 'socks5', host: '', port: 0, identityId: 'missing-identity' } }],
+  ['an incomplete proxy identity', { proxyConfig: { type: 'socks5', host: '', port: 0, identityId: 'incomplete-identity' } }],
+] as const) {
+  test(`Telnet adding ${label} cannot bypass actual starter rejection through reuse`, async (t) => {
+    const original = host({ protocol: 'telnet' });
+    const api = await harness(original, { identities: [{ id: 'incomplete-identity', label: 'Incomplete', username: 'proxy-user', authMethod: 'password', created: 0 }] });
+    t.after(api.close);
+    assert.equal((await api.find())?.sessionId, 'tab');
+    await api.update({ host: { ...original, ...proxy } });
+    assert.equal(await api.find(), undefined);
+    await api.update({ host: { ...original, label: 'Renamed without a proxy' } });
+    assert.equal((await api.find())?.sessionId, 'tab');
+  });
+}
+
+test('Telnet inheriting a proxy profile cannot reuse its previous direct session', async (t) => {
+  const original = host({ protocol: 'telnet', group: 'prod/web' });
+  const groupConfigs: GroupConfig[] = [];
+  const proxyProfiles = [{ id: 'group-proxy', label: 'Proxy', createdAt: 0, config: { type: 'socks5' as const, host: 'proxy.invalid', port: 1080 } }];
+  const resolveEffectiveHost = (candidate: Host) => resolveEffectiveTerminalHost({ host: candidate, groupConfigs, proxyProfiles });
+  const api = await harness(original, { resolveEffectiveHost });
+  t.after(api.close);
+  assert.equal((await api.find())?.sessionId, 'tab');
+  groupConfigs.push({ path: 'prod', proxyProfileId: 'group-proxy' });
+  assert.equal(resolveEffectiveHost(original).proxyConfig?.host, 'proxy.invalid');
+  await api.update({ host: { ...original } });
+  assert.equal(await api.find(), undefined);
 });
