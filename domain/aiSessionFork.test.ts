@@ -231,3 +231,17 @@ test('fork keeps output previews but removes source-only saved-output references
   assert.equal(JSON.parse(plan.messages[1].toolResults![0].content!).handleId, null);
   assert.match(source.messages[1].content, /tool-output-abc/);
 });
+
+test('fork removes source output handles only from tool_output_read arguments', () => {
+  const read = msg({ toolCalls: [{ id: 'read', name: 'tool_output_read', arguments: { handleId: 'tool-output-source', offset: 12 } }] });
+  const done = msg({ toolResults: [{ toolCallId: 'read', content: 'preview' }], content: 'done' });
+  const source = session([read, done]);
+  const plan = planSessionFork(source, done.id);
+  assert.ok(plan.ok);
+  assert.equal(plan.messages[0].toolCalls![0].arguments!.handleId, undefined);
+  assert.equal(plan.messages[0].toolCalls![0].arguments!.offset, 12);
+  assert.equal(read.toolCalls![0].arguments!.handleId, 'tool-output-source');
+
+  const other = msg({ toolCalls: [{ id: 'other', name: 'custom_tool', arguments: { handleId: 'tool-output-not-owned-here' } }] });
+  assert.deepEqual(stripMessageContinuationState(other).toolCalls, other.toolCalls);
+});

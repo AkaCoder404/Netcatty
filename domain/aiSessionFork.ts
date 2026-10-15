@@ -30,7 +30,7 @@ export type ForkMessageLike = {
   content: string;
   thinking?: string;
   providerContinuation?: unknown;
-  toolCalls?: ReadonlyArray<{ id: string }>;
+  toolCalls?: ReadonlyArray<{ id: string; name?: string; arguments?: Record<string, unknown> }>;
   toolResults?: ReadonlyArray<{ toolCallId: string; content?: string; isError?: boolean }>;
   errorInfo?: unknown;
   statusText?: string;
@@ -113,6 +113,16 @@ export function stripMessageContinuationState<M extends ForkMessageLike>(message
     ...message,
     content: stripSourceOutputHandles(message.content),
     ...(message.thinking ? { thinking: stripSourceOutputHandles(message.thinking) } : {}),
+    ...(message.toolCalls ? {
+      toolCalls: message.toolCalls.map(call => {
+        if (call.name !== 'tool_output_read'
+          || typeof call.arguments?.handleId !== 'string'
+          || !call.arguments.handleId.startsWith('tool-output-')) return call;
+        const args = { ...call.arguments };
+        delete args.handleId;
+        return { ...call, arguments: args };
+      }),
+    } : {}),
     ...(message.toolResults ? {
       toolResults: message.toolResults.map(result => ({
         ...result,
