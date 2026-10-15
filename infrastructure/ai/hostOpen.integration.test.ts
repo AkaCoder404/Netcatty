@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import type { Host, TerminalSession } from '../../domain/models';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { createHostTerminalSession } from '../../application/state/sessionFactories';
 import { useHostOpenSessionReuse } from '../../application/state/useHostOpenSessionReuse';
 import { handleVaultAgentOp, type VaultAgentApiDeps } from './vaultAgentBridgeClient';
 
@@ -38,7 +39,7 @@ test('MCP host_open forwards the schema input through RPC and vault service to t
     findExistingSessionForHost: (hostId: string) => finder(hostId),
     openHost: (openedHost: Host) => {
       const sessionId = `new-${tabs.length}`;
-      tabs.push({ ...tabs[0], id: sessionId, hostname: openedHost.hostname, username: openedHost.username });
+      tabs.push(createHostTerminalSession(sessionId, openedHost));
       return { ok: true as const, sessionId, host };
     },
   } as unknown as VaultAgentApiDeps;
@@ -85,4 +86,21 @@ test('MCP host_open forwards the schema input through RPC and vault service to t
   const editedTarget = await run({ hostId: host.id });
   assert.notEqual(editedTarget.sessionId, recovered.sessionId, 'a saved endpoint edit must not reuse the old transport');
   assert.equal(editedTarget.reused, undefined);
+  // Saved serial hosts use the same first-party host_open path and factory.
+  tabs.length = 0;
+  host.protocol = 'serial';
+  host.hostname = '/dev/tty.test';
+  host.username = '';
+  host.serialConfig = { path: host.hostname, baudRate: 9600, dataBits: 8, parity: 'none', flowControl: 'none' };
+  const serial = await run({ hostId: host.id });
+  assert.equal(serial.protocol, 'serial');
+  assert.equal(tabs[0].serialConfig?.baudRate, 9600);
+  tabs[0].status = 'connected';
+  assert.equal((await run({ hostId: host.id })).sessionId, serial.sessionId);
+  host.serialConfig = { ...host.serialConfig, baudRate: 19200 };
+  const changedSerial = await run({ hostId: host.id });
+  assert.notEqual(changedSerial.sessionId, serial.sessionId, 'an edited serial configuration must not reuse the old parameters');
+  assert.equal(changedSerial.reused, undefined);
+  assert.equal(tabs[1].serialConfig?.baudRate, 19200);
+  assert.equal(tabs[0].serialConfig?.baudRate, 9600);
 });

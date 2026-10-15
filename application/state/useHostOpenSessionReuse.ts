@@ -3,6 +3,7 @@ import type { Host, Identity, SSHKey, TerminalSession } from '../../domain/model
 import { findReusableHostSession } from '../../domain/hostOpenSession';
 import { buildSftpHostCredentials } from './sftp/useSftpHostCredentials';
 import { buildTransferPoolKey } from './sftp/transferConnectionPool';
+import { createHostTerminalSession } from './sessionFactories';
 
 type HostOpenSessionReuseInput = {
   sessions: TerminalSession[];
@@ -33,6 +34,7 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
       etEnabled: host.etEnabled,
       etPort: host.etPort,
       pluginConnection: host.pluginConnection,
+      serialConfig: host.protocol === 'serial' ? createHostTerminalSession('', host).serialConfig : undefined,
       agentForwarding: host.agentForwarding,
       x11Forwarding: host.x11Forwarding,
     };
@@ -57,6 +59,7 @@ export function useHostOpenSessionReuse({ sessions, hosts, keys, identities, res
           protocol: session.protocol ?? host.protocol,
           moshEnabled: session.moshEnabled ?? host.moshEnabled,
           etEnabled: session.etEnabled ?? host.etEnabled,
+          serialConfig: session.serialConfig ?? host.serialConfig,
         }).catch(() => undefined));
       } catch {
         openingKeys.current.set(session.id, Promise.resolve(undefined));
