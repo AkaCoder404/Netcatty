@@ -4,7 +4,7 @@
  * distinct from the SSH HostDetailsPanel. Lets users save named local shells
  * into vault groups next to their SSH hosts (issue #3615).
  */
-import { ChevronDown, ChevronUp, Save, Tag, TerminalSquare, X } from 'lucide-react';
+import { Save, TerminalSquare, X } from 'lucide-react';
 import React, { useMemo, useState } from 'react';
 import { useI18n } from '../application/i18n/I18nProvider';
 import { useDiscoveredShells } from '../lib/useDiscoveredShells';
@@ -13,10 +13,9 @@ import type { Host } from '../domain/models';
 import { createLocalShellHost } from '../domain/localShellHost';
 
 import { Button } from './ui/button';
-import { Combobox, ComboboxOption, MultiCombobox } from './ui/combobox';
+import { Combobox, ComboboxOption } from './ui/combobox';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 import {
   AsidePanel,
   AsidePanelContent,
@@ -24,14 +23,12 @@ import {
   type AsidePanelLayout,
   type AsidePanelResizeProps,
 } from './ui/aside-panel';
-import { HostNotesEditor } from './host/HostNotesEditor';
 import { cn } from '../lib/utils';
 
 interface LocalShellHostDetailsPanelProps {
   /** Existing host when editing; null/undefined when creating a new entry. */
   initialData?: Host | null;
   defaultGroup?: string;
-  allTags?: string[];
   groups?: string[];
   onSave: (host: Host) => void;
   /** Saves the host and immediately opens a terminal for it. */
@@ -47,7 +44,6 @@ type LocalShellHostDetailsPanelPropsWithResize =
 export const LocalShellHostDetailsPanel: React.FC<LocalShellHostDetailsPanelPropsWithResize> = ({
   initialData,
   defaultGroup,
-  allTags = [],
   groups = [],
   onSave,
   onSaveAndConnect,
@@ -64,15 +60,12 @@ export const LocalShellHostDetailsPanel: React.FC<LocalShellHostDetailsPanelProp
   const [label, setLabel] = useState(initialData?.label ?? '');
   const [shell, setShell] = useState(initialData?.localShell ?? '');
   const [startDir, setStartDir] = useState(initialData?.localStartDir ?? '');
-  const [tags, setTags] = useState<string[]>(initialData?.tags ?? []);
   // On creation, initialize from defaultGroup so the field reflects what a
   // plain save would persist; clearing it then intentionally saves at the
   // vault root. Edits keep the host's own group (possibly empty).
   const [group, setGroup] = useState(
     initialData ? initialData.group ?? '' : defaultGroup ?? '',
   );
-  const [notes, setNotes] = useState(initialData?.notes ?? '');
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const matchedShell = useMemo(
     () => discoveredShells.find((candidate) => candidate.id === shell),
@@ -108,14 +101,6 @@ export const LocalShellHostDetailsPanel: React.FC<LocalShellHostDetailsPanelProp
     return options;
   }, [discoveredShells, t]);
 
-  const tagOptions: ComboboxOption[] = useMemo(() => {
-    const allUniqueTags = new Set([...allTags, ...tags]);
-    return Array.from(allUniqueTags).map((tag) => ({
-      value: tag,
-      label: tag,
-    }));
-  }, [allTags, tags]);
-
   const groupOptions: ComboboxOption[] = useMemo(() => {
     const allGroups = new Set(groups);
     if (group && !allGroups.has(group)) {
@@ -143,8 +128,8 @@ export const LocalShellHostDetailsPanel: React.FC<LocalShellHostDetailsPanelProp
       // Save the controlled value directly: '' means the user explicitly
       // cleared the group, which persists at the vault root.
       group: group,
-      tags,
-      notes,
+      tags: initialData?.tags,
+      notes: initialData?.notes,
     });
     // On edits, merge over the existing host so fields this form does not
     // expose (pinned, lastConnectedAt, order, ...) and the original
@@ -205,22 +190,6 @@ export const LocalShellHostDetailsPanel: React.FC<LocalShellHostDetailsPanelProp
           </p>
         </div>
 
-        {/* Tags */}
-        <div className="space-y-2">
-          <Label className="flex items-center gap-2">
-            <Tag size={14} />
-            {t('hostDetails.tags')}
-          </Label>
-          <MultiCombobox
-            options={tagOptions}
-            values={tags}
-            onValuesChange={setTags}
-            placeholder={t('hostDetails.addTag')}
-            allowCreate
-            createText={t('hostDetails.createTag')}
-          />
-        </div>
-
         {/* Group */}
         <div className="space-y-2">
           <Label>{t('hostDetails.group')}</Label>
@@ -234,55 +203,29 @@ export const LocalShellHostDetailsPanel: React.FC<LocalShellHostDetailsPanelProp
           />
         </div>
 
-        <HostNotesEditor
-          panelKey={initialData?.id ?? 'local-shell-new'}
-          value={notes}
-          onChange={setNotes}
-        />
-
-        {/* Advanced options */}
-        <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
-          <CollapsibleTrigger asChild>
-            <Button
-              variant="ghost"
-              className="w-full justify-between h-9 px-0 hover:bg-transparent"
-            >
-              <span className="text-sm font-medium text-muted-foreground">
-                {t('common.advanced')}
-              </span>
-              {showAdvanced ? (
-                <ChevronUp size={14} className="text-muted-foreground" />
-              ) : (
-                <ChevronDown size={14} className="text-muted-foreground" />
-              )}
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="space-y-4 pt-2">
-            {/* Start directory */}
-            <div className="space-y-2">
-              <Label htmlFor="local-shell-start-dir">{t('localShell.field.startDir')}</Label>
-              <div className="relative">
-                <Input
-                  id="local-shell-start-dir"
-                  value={startDir}
-                  onChange={(e) => setStartDir(e.target.value)}
-                  placeholder={t('localShell.field.startDirPlaceholder')}
-                  className="pr-8"
-                />
-                {startDir && (
-                  <button
-                    type="button"
-                    onClick={() => setStartDir('')}
-                    aria-label={t('common.reset')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
+        {/* Start directory */}
+        <div className="space-y-2">
+          <Label htmlFor="local-shell-start-dir">{t('localShell.field.startDir')}</Label>
+          <div className="relative">
+            <Input
+              id="local-shell-start-dir"
+              value={startDir}
+              onChange={(e) => setStartDir(e.target.value)}
+              placeholder={t('localShell.field.startDirPlaceholder')}
+              className="pr-8"
+            />
+            {startDir && (
+              <button
+                type="button"
+                onClick={() => setStartDir('')}
+                aria-label={t('common.reset')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        </div>
       </AsidePanelContent>
 
       <AsidePanelFooter>

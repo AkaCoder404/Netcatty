@@ -167,7 +167,6 @@ export const AppHostEditorLayer: React.FC<AppHostEditorLayerProps> = ({
           <LocalShellHostDetailsPanel
             key={editorKey}
             initialData={target.openedHost}
-            allTags={allTags}
             groups={groups}
             onSave={onSave}
             onCancel={onCancel}

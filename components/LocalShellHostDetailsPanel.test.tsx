@@ -60,9 +60,9 @@ test("renderToStaticMarkup: edit mode hides Save & Connect and shows existing sh
 
   assert.match(markup, /localShell\.panel\.title\.edit/);
   assert.doesNotMatch(markup, /localShell\.saveAndConnect/);
-  // Existing label and local tag are carried into the form
+  // Existing label is carried into the form
   assert.match(markup, /Project A CMD/);
-  assert.match(markup, />local</);
+  assert.match(markup, /local-shell-start-dir/);
 });
 
 test("buildHost preserves the saved OS on edits and detects it only for new entries", () => {

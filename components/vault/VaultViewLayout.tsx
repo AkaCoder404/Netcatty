@@ -1550,7 +1550,6 @@ export function VaultViewLayout({ ctx }: { ctx: VaultViewLayoutContext }) {
               <LocalShellHostDetailsPanel
                 key={editingLocalShellHost?.id ?? "local-shell-new"}
                 initialData={editingLocalShellHost}
-                allTags={allTags}
                 groups={allGroupPaths}
                 defaultGroup={
                   editingLocalShellHost

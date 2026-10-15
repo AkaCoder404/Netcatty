@@ -270,22 +270,6 @@ export function AppSideEffects() {
     renameSessionInline,
   } = sessionState;
 
-  // Presentation-field thrash stays off Host bags (Hosts use retainStable);
-  // AppSideEffects only needs host/session maps for glue handlers and effects.
-  const handleRunSnippet = useCallback(
-    async (snippet: Snippet, targetHosts: Host[]) => {
-      if (targetHosts.length === 0) return;
-      if (isScriptSnippet(snippet)) {
-        runSnippet(snippet, targetHosts);
-        return;
-      }
-      const command = await resolveSnippetCommand(snippet);
-      if (command === null) return;
-      runSnippet(snippet, targetHosts, command);
-    },
-    [runSnippet],
-  );
-
   // Presence-only list: keystrokes must not rebuild App domains / TopTabs structure.
   const editorTabs = useEditorTabChromeList();
 
@@ -1379,6 +1363,20 @@ export function AppSideEffects() {
       terminalSettings,
     });
   }, [groupConfigs, proxyProfileIdSet, proxyProfiles, discoveredShells, terminalSettings]);
+
+  const handleRunSnippet = useCallback(
+    async (snippet: Snippet, targetHosts: Host[]) => {
+      if (targetHosts.length === 0) return;
+      if (isScriptSnippet(snippet)) {
+        runSnippet(snippet, targetHosts.map(resolveEffectiveHost));
+        return;
+      }
+      const command = await resolveSnippetCommand(snippet);
+      if (command === null) return;
+      runSnippet(snippet, targetHosts.map(resolveEffectiveHost), command);
+    },
+    [runSnippet, resolveEffectiveHost],
+  );
 
   const createWorkspaceWithEffectiveHosts = useCallback((name: string, selectedHosts: Host[]) => {
     createWorkspaceWithHosts(name, selectedHosts.map(resolveEffectiveHost));
