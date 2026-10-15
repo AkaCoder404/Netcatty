@@ -76,6 +76,9 @@ const DEFAULT_WINDOW_WIDTH = 1400;
 const DEFAULT_WINDOW_HEIGHT = 900;
 // Minimum window size: enough to render the expanded sidebar + a usable
 // host list + the 420px host details / new-host aside panel without overflow.
+// Small displays shrink this fit to their work area at window-creation time
+// (see resolveWindowMinimumSize in windowManager/mainWindow.cjs, #3647);
+// the minimum tracks the display the window currently occupies.
 const MIN_WINDOW_WIDTH = 1100;
 const MIN_WINDOW_HEIGHT = 640;
 
@@ -946,6 +949,8 @@ const mainWindowApi = createMainWindowApi({
   createAppWindowOpenHandler,
   attachOAuthLoadingOverlay,
   queryDirtyEditors: (...args) => require("./dirtyEditorGuard.cjs").queryDirtyEditors(...args),
+  hasEditorTabsForSource: (webContents) => editorWindowApi.hasEditorTabsForSource(webContents),
+  closeEditorTabsForSource: (...args) => editorWindowApi.closeEditorTabsForSource(...args),
   registerWindowHandlers,
   requestWindowCommandClose,
   shouldCloseWindowFromInput,
@@ -1038,6 +1043,36 @@ const {
   closeTerminalPopupWindow,
   getTerminalPopupWindows,
 } = terminalPopupWindowApi;
+
+const { createEditorWindowApi } = require("./windowManager/editorWindow.cjs");
+const editorWindowApi = createEditorWindowApi({
+  get mainWindow() { return mainWindow; },
+  get currentTheme() { return currentTheme; },
+  get isQuitting() { return isQuitting; },
+  V8_CACHE_OPTIONS,
+  __dirname,
+  resolveFrontendBackgroundColor,
+  createExternalOnlyWindowOpenHandler,
+  getDevRendererBaseUrl,
+  applyWindowOpacityToWindow,
+  showAndFocusWindow,
+  resolveSettingsWindowBounds,
+  registerAppContentWindow,
+  unregisterAppContentWindow,
+  notifyAppContentWindowClosed,
+  queryDirtyEditors: (...args) => require("./dirtyEditorGuard.cjs").queryDirtyEditors(...args),
+});
+const {
+  openEditorWindow,
+  focusEditorTab,
+  closeEditorTabs: closeEditorWindowTabs,
+  saveEditorTab: saveEditorWindowTab,
+  dockEditorTab,
+  reportEditorDirty,
+  reportEditorTabsClosed,
+  remapEditorSession,
+  getEditorWindow,
+} = editorWindowApi;
 
 /**
  * Register window control IPC handlers (only once)
@@ -1491,6 +1526,15 @@ module.exports = {
   openTerminalPopupWindow,
   closeTerminalPopupWindow,
   getTerminalPopupWindows,
+  openEditorWindow,
+  focusEditorTab,
+  closeEditorWindowTabs,
+  saveEditorWindowTab,
+  dockEditorTab,
+  reportEditorDirty,
+  reportEditorTabsClosed,
+  remapEditorSession,
+  getEditorWindow,
   prewarmSettingsWindow,
   buildAppMenu,
   getCurrentLanguage,

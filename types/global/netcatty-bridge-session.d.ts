@@ -39,6 +39,8 @@ declare global {
   interface NetcattyBridge {
     getWindowsPtyInfo?(): NetcattyWindowsPtyInfo | null;
     startSSHSession(options: NetcattySSHOptions): Promise<string>;
+    testConnection?(options: NetcattySSHOptions): Promise<string>;
+    cancelTestConnection?(sessionId: string): Promise<{ success: boolean; error?: string }>;
     startTelnetSession?(options: {
       sessionId?: string;
       hostname: string;
@@ -316,7 +318,7 @@ declare global {
         }>;
         netRxSpeed: number;           // Total network receive speed (bytes/sec)
         netTxSpeed: number;           // Total network transmit speed (bytes/sec)
-        latencyMs: number | null;     // TCP connection establishment latency to the SSH endpoint
+        latencyMs: number | null;     // SSH transport ping on the existing session, not a second TCP dial
         netInterfaces: Array<{        // Per-interface network stats
           name: string;               // Interface name (e.g., eth0, ens33)
           rxBytes: number;            // Total received bytes
@@ -529,7 +531,7 @@ declare global {
     ): () => void;
     onSessionExit(
       sessionId: string,
-      cb: (evt: { exitCode?: number; signal?: number; error?: string; reason?: "exited" | "error" | "timeout" | "closed" }) => void
+      cb: (evt: { exitCode?: number; signal?: number; exitSignal?: string; error?: string; reason?: "exited" | "error" | "timeout" | "closed" | "signaled"; remoteClosedWithoutExitStatus?: boolean }) => void
     ): () => void;
     onTelnetAutoLoginComplete?(
       sessionId: string,
