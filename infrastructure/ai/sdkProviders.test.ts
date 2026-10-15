@@ -289,7 +289,7 @@ test("OpenAI Chat sends inline image attachments as data URLs through the bridge
   const originalWindow = browserGlobal.window;
   t.after(() => { browserGlobal.window = originalWindow; });
   const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
-  browserGlobal.window = { netcatty: {
+  Reflect.set(globalThis, "window", { netcatty: {
     aiFetch: async (url: string, _method: string, _headers: Record<string, string>, body: string) => {
       requests.push({ url, body: JSON.parse(body) });
       return { ok: false, status: 400, data: '{"error":{"message":"captured request"}}' };
@@ -301,7 +301,7 @@ test("OpenAI Chat sends inline image attachments as data URLs through the bridge
     onAiStreamData: () => () => {},
     onAiStreamEnd: () => () => {},
     onAiStreamError: () => () => {},
-  } };
+  } });
 
   for (const [mediaType, base64Data] of [["image/png", "iVBORw0KGgo="], ["image/jpeg", "/9j/4A=="]]) {
     const messages = buildCattySdkMessages({
@@ -312,7 +312,7 @@ test("OpenAI Chat sends inline image attachments as data URLs through the bridge
     });
     const model = createModelFromConfig(makeConfig({ openaiApi: "chat", apiKey: "test-key", baseURL: "https://example.test/v1" }));
     await assert.rejects(generateText({ model, messages, maxRetries: 0 }), /captured request/);
-    await assert.rejects(streamText({ model, messages, maxRetries: 0, onError: () => {} }).text);
+    await assert.rejects(async () => await streamText({ model, messages, maxRetries: 0, onError: () => {} }).text);
     for (const request of requests.slice(-2)) {
       assert.equal(request.url, "https://example.test/v1/chat/completions");
       assert.deepEqual(request.body.messages, [{ role: "user", content: [
