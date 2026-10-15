@@ -483,3 +483,60 @@ for (const phase of ["snapshot", "commit"] as const) {
     assert.equal(commits, phase === "snapshot" ? 0 : 1);
   });
 }
+
+test("group deletion prunes jump-chain references to hosts removed in the same transaction", async () => {
+  const actEnvironment = globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  };
+  const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+  actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+
+  const storedHosts = [
+    { id: "jump", group: "A", label: "jump", hostname: "j.example.com", port: 22, username: "root", protocol: "ssh" as const, tags: [], os: "linux" as const },
+    { id: "survivor", group: "B", label: "survivor", hostname: "s.example.com", port: 22, username: "root", protocol: "ssh" as const, tags: [], os: "linux" as const, hostChain: { hostIds: ["jump"] } },
+  ];
+  let deleteGroups: ((paths: Iterable<string>, deleteHosts?: boolean) => Promise<void>) | undefined;
+  let renderer: ReactTestRenderer | null = null;
+  let committedHosts: Array<{ id: string; hostChain?: { hostIds: string[] } }> = [];
+
+  const Probe = () => {
+    deleteGroups = useVaultGroupDeletion({
+      customGroups: ["A", "B"],
+      hosts: storedHosts,
+      groupConfigs: [],
+      managedSources: [],
+      onReadPersistedHosts: async () => storedHosts,
+      onReadPersistedManagedSources: () => [],
+      onCommitVaultGroupMutation: async (mutate) => {
+        const result = mutate({
+          groups: ["A", "B"],
+          configs: [],
+          hosts: storedHosts,
+          managedSources: [],
+          snippets: [],
+        });
+        if (result.ok) committedHosts = result.state.hosts;
+        return result;
+      },
+    });
+    return null;
+  };
+
+  try {
+    await act(async () => {
+      renderer = create(React.createElement(Probe));
+    });
+    await act(async () => {
+      await deleteGroups?.(["A"], true);
+    });
+  } finally {
+    await act(async () => {
+      renderer?.unmount();
+    });
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
+
+  assert.deepEqual(committedHosts.map(({ id, hostChain }) => ({ id, hostChain })), [
+    { id: "survivor", hostChain: undefined },
+  ]);
+});

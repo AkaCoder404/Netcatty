@@ -42,6 +42,7 @@ import { resolveHostDefaultLocalShell } from '../../domain/localShellHost';
 import { resolveGroupDefaults, applyGroupDefaults } from '../../domain/groupConfig';
 import { upsertKnownHost } from '../../domain/knownHosts';
 import { materializeHostProxyProfile } from '../../domain/proxyProfiles';
+import { pruneVaultJumpHostReferences } from '../../domain/vaultJumpGraph';
 import { buildSshDeepLinkConnectionHost, buildSshDeepLinkEphemeralHost, buildSshDeepLinkEphemeralHostFromSaved, buildSshDeepLinkHostDraft, findSshDeepLinkHost, parseSshDeepLink } from '../../domain/sshDeepLink';
 import { buildTelnetDeepLinkConnectionHost, buildTelnetDeepLinkEphemeralHostFromSaved, buildTelnetDeepLinkOpenHost, findTelnetDeepLinkHost, materializeTelnetDeepLinkMatchHost, parseTelnetDeepLink } from '../../domain/telnetDeepLink';
 import { buildJmsDeepLinkEphemeralHost, isSupportedJmsProtocol, parseJmsDeepLink } from '../../domain/jmsDeepLink';
@@ -1201,9 +1202,18 @@ export function AppSideEffects() {
 
   const handleConfirmDeleteHost = useCallback(() => {
     if (!deleteHostConfirm) return;
-    updateHosts(hosts.filter(h => h.id !== deleteHostConfirm.hostId));
+    // Removing a host must also drop references to it from every jump chain,
+    // otherwise targets keep pointing at a missing jump host and fail to
+    // connect with "A configured jump host is missing".
+    const pruned = pruneVaultJumpHostReferences({
+      hosts: hosts.filter(h => h.id !== deleteHostConfirm.hostId),
+      groupConfigs,
+      removedHostIds: [deleteHostConfirm.hostId],
+    });
+    updateHosts(pruned.hosts);
+    if (pruned.groupConfigs !== groupConfigs) updateGroupConfigs(pruned.groupConfigs);
     setDeleteHostConfirm(null);
-  }, [deleteHostConfirm, hosts, updateHosts]);
+  }, [deleteHostConfirm, hosts, groupConfigs, updateHosts, updateGroupConfigs]);
 
   const handleCancelDeleteHost = useCallback(() => {
     setDeleteHostConfirm(null);
