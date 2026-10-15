@@ -38,9 +38,10 @@ async function mountedDestination(t, options = {}) {
       const result = await original.apply(fs.promises, args);
       if (name !== "open" || args[0] === stage) return result;
       const created = args[1] === "wx";
-      if (created && options.virtualMode !== undefined) fs.chmodSync(args[0], options.virtualMode);
-      result.chmod = async () => { calls.push("chmod"); throw unsupported(); };
-      result.utimes = async () => { calls.push("utimes"); throw unsupported(); };
+      const virtualMode = args[0] === target ? options.finalVirtualMode ?? options.virtualMode : options.virtualMode;
+      if (created && virtualMode !== undefined) fs.chmodSync(args[0], virtualMode);
+      result.chmod = async () => { calls.push("chmod"); throw unsupported(options.metadataError); };
+      result.utimes = async () => { calls.push("utimes"); throw unsupported(options.metadataError); };
       if (created) {
         const final = args[0] === target;
         calls.push(final ? "final-open" : "ready-open");
@@ -74,9 +75,9 @@ async function mountedDestination(t, options = {}) {
   return { root, stage, target, payload, calls, run };
 }
 
-for (const [virtualMode, copyError] of [[0o644, "ENOTSUP"], [0o700, "EOPNOTSUPP"]]) {
-  test(`new mounted destination accepts creation policy ${virtualMode.toString(8)} through both copy stages`, async (t) => {
-    const setup = await mountedDestination(t, { virtualMode, copyError });
+for (const [virtualMode, copyError, metadataError] of [[0o644, "ENOTSUP"], [0o700, "EOPNOTSUPP"], [0o700, "ENOTSUP", "EPERM"], [0o700, "ENOTSUP", "EACCES"]]) {
+  test(`new mounted destination accepts creation policy ${virtualMode.toString(8)} with ${metadataError || "ENOTSUP"} through both copy stages`, async (t) => {
+    const setup = await mountedDestination(t, { virtualMode, copyError, metadataError });
     await setup.run();
     assert.deepEqual(fs.readFileSync(setup.target), setup.payload);
     assert.deepEqual(fs.readdirSync(setup.root), ["target"]);
@@ -86,21 +87,23 @@ for (const [virtualMode, copyError] of [[0o644, "ENOTSUP"], [0o700, "EOPNOTSUPP"
   });
 }
 
-test("existing mounted file keeps matching virtual permissions", async (t) => {
-  const setup = await mountedDestination(t, { virtualMode: 0o700, existingMode: 0o700 });
-  await setup.run();
-  assert.deepEqual(fs.readFileSync(setup.target), setup.payload);
-  assert.equal(fs.statSync(setup.target).mode & 0o7777, 0o700);
-  assert.deepEqual(fs.readdirSync(setup.root), ["target"]);
-});
+for (const metadataError of ["ENOTSUP", "EPERM", "EACCES"]) {
+  test(`existing mounted file keeps matching virtual permissions: ${metadataError}`, async (t) => {
+    const setup = await mountedDestination(t, { virtualMode: 0o700, existingMode: 0o700, metadataError });
+    await setup.run();
+    assert.deepEqual(fs.readFileSync(setup.target), setup.payload);
+    assert.equal(fs.statSync(setup.target).mode & 0o7777, 0o700);
+    assert.deepEqual(fs.readdirSync(setup.root), ["target"]);
+  });
 
-test("unsupported chmod cannot broaden an existing destination", async (t) => {
-  const setup = await mountedDestination(t, { virtualMode: 0o700, existingMode: 0o600 });
-  await assert.rejects(setup.run, { code: "ENOTSUP" });
-  assert.equal(fs.readFileSync(setup.target, "utf8"), "original");
-  assert.equal(fs.statSync(setup.target).mode & 0o7777, 0o600);
-  assert.deepEqual(fs.readFileSync(setup.stage), setup.payload);
-});
+  test(`refused chmod cannot broaden an existing destination: ${metadataError}`, async (t) => {
+    const setup = await mountedDestination(t, { virtualMode: 0o700, existingMode: 0o600, metadataError });
+    await assert.rejects(setup.run, { code: metadataError });
+    assert.equal(fs.readFileSync(setup.target, "utf8"), "original");
+    assert.equal(fs.statSync(setup.target).mode & 0o7777, 0o600);
+    assert.deepEqual(fs.readFileSync(setup.stage), setup.payload);
+  });
+}
 
 for (const copyError of ["EACCES", "EPERM", "ENOSPC", "EIO", "EEXIST", "EINVAL"]) {
   test(`copyFile ${copyError} remains a failure`, async (t) => {
@@ -112,7 +115,7 @@ for (const copyError of ["EACCES", "EPERM", "ENOSPC", "EIO", "EEXIST", "EINVAL"]
   });
 }
 
-for (const failure of [{ cancel: true }, { closeError: "ready" }, { closeError: "final" }, { writeError: "ENOSPC" }]) {
+for (const failure of [{ cancel: true }, { closeError: "ready" }, { closeError: "final" }, { writeError: "ENOSPC" }, { writeError: "EPERM" }, { writeError: "EACCES" }]) {
   test(`copy failure preserves original and complete stage: ${JSON.stringify(failure)}`, async (t) => {
     const setup = await mountedDestination(t, { existingMode: 0o644, virtualMode: 0o644, ...failure });
     await assert.rejects(setup.run, /Recovery files preserved/);
@@ -133,11 +136,27 @@ test("failed copy followed by exclusive-open collision leaves that entry intact"
   assert.equal(fs.existsSync(setup.target), false);
 });
 
-test("rollback retains backup when its original timestamps cannot be restored", async (t) => {
-  const setup = await mountedDestination(t, { existingMode: 0o644, cancelBeforeFinal: true });
-  await assert.rejects(setup.run, /Recovery files preserved/);
-  const backup = fs.readdirSync(setup.root).find(name => name.endsWith(".backup"));
-  assert.ok(backup);
-  assert.equal(fs.readFileSync(path.join(setup.root, backup), "utf8"), "original");
-  assert.deepEqual(fs.readFileSync(setup.stage), setup.payload);
-});
+for (const metadataError of ["ENOTSUP", "EPERM", "EACCES"]) {
+  test(`rollback retains backup when its original timestamps cannot be restored: ${metadataError}`, async (t) => {
+    const setup = await mountedDestination(t, { existingMode: 0o644, cancelBeforeFinal: true, metadataError });
+    await assert.rejects(setup.run, /Recovery files preserved/);
+    const backup = fs.readdirSync(setup.root).find(name => name.endsWith(".backup"));
+    assert.ok(backup);
+    assert.equal(fs.readFileSync(path.join(setup.root, backup), "utf8"), "original");
+    assert.deepEqual(fs.readFileSync(setup.stage), setup.payload);
+  });
+}
+
+for (const metadataError of ["EPERM", "EACCES"]) {
+  test(`final copy cannot broaden an existing destination after chmod ${metadataError}`, async (t) => {
+    const setup = await mountedDestination(t, {
+      existingMode: 0o644, virtualMode: 0o644, finalVirtualMode: 0o700, metadataError,
+    });
+    await assert.rejects(setup.run, /Recovery files preserved/);
+    const backup = fs.readdirSync(setup.root).find(name => name.endsWith(".backup"));
+    assert.ok(backup);
+    assert.equal(fs.readFileSync(path.join(setup.root, backup), "utf8"), "original");
+    assert.deepEqual(fs.readFileSync(setup.stage), setup.payload);
+    assert.equal(setup.calls.some(call => Array.isArray(call) && call[0] === "commit"), false);
+  });
+}

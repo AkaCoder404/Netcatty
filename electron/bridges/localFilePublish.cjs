@@ -59,7 +59,7 @@ async function publishLocalFileExclusive(source, target, assertNotCancelled = ()
       } catch (error) {
         // New files follow the mount's access policy (GVFS can synthesize mode
         // bits). Replacements must still preserve the validated protection.
-        if (!isMetadataUnsupportedError(error) || options.preserveMode !== false) throw error;
+        if (!isOptionalMetadataError(error) || options.preserveMode !== false) throw error;
       }
       if (options.preserveMode !== false && ((await output.stat()).mode & 0o7777) !== mode) {
         throw new Error("Cannot preserve local destination permissions");
@@ -68,7 +68,7 @@ async function publishLocalFileExclusive(source, target, assertNotCancelled = ()
     try {
       await output.utimes(stat.atime, stat.mtime);
     } catch (error) {
-      if (!isMetadataUnsupportedError(error) || options.requireTimestamps !== false) throw error;
+      if (!isOptionalMetadataError(error) || options.requireTimestamps !== false) throw error;
       timestampsPreserved = false;
     }
     const ownedStat = await output.stat();
@@ -91,6 +91,12 @@ async function publishLocalFileExclusive(source, target, assertNotCancelled = ()
     throw failure;
   }
   return publishedIdentity;
+}
+
+// Only optional chmod/utimes may ignore permission refusal. Never use this
+// predicate for creation, data writes, close, or required permission changes.
+function isOptionalMetadataError(error) {
+  return isMetadataUnsupportedError(error) || ["EPERM", "EACCES"].includes(error?.code);
 }
 
 function isMetadataUnsupportedError(error) {
