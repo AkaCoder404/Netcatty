@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { reportSftpUploadResults } from "./reportSftpUploadResults.ts";
+import { reportSftpUploadResults, resolveSftpUploadErrorText } from "./reportSftpUploadResults.ts";
 import { SFTP_VIRTUAL_FOLDER_UPLOAD_ERROR } from "../../domain/sftpVirtualDrop";
 
 const t = (key: string, params?: Record<string, string | number>) => {
@@ -138,4 +138,10 @@ test("replaces the virtual archive-folder sentinel with a localized message", ()
     calls[0]?.message,
     "sftp.error.uploadFailed: folder - sftp.upload.virtualFolderError",
   );
+});
+
+test("resolveSftpUploadErrorText maps the sentinel for non-reporting consumers", () => {
+  assert.equal(resolveSftpUploadErrorText(SFTP_VIRTUAL_FOLDER_UPLOAD_ERROR, t), "sftp.upload.virtualFolderError");
+  assert.equal(resolveSftpUploadErrorText("stream error", t), "stream error");
+  assert.equal(resolveSftpUploadErrorText(undefined, t), undefined);
 });

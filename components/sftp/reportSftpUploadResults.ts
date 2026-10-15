@@ -1,6 +1,17 @@
 import { isSftpVirtualFolderUploadError } from "../../domain/sftpVirtualDrop";
 import type { UploadResult } from "../../lib/uploadService.types";
 
+/**
+ * Maps a raw upload error for display. The virtual archive-folder sentinel is
+ * an internal marker, never user-facing text: every upload-result consumer
+ * must route errors through this helper before presenting them.
+ */
+export const resolveSftpUploadErrorText = (
+  error: string | undefined,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string | undefined =>
+  isSftpVirtualFolderUploadError(error) ? t("sftp.upload.virtualFolderError") : error;
+
 export type ReportSftpUploadResultsOptions = {
   results: readonly UploadResult[];
   t: (key: string, params?: Record<string, string | number>) => string;
@@ -39,11 +50,7 @@ export function reportSftpUploadResults({
 
   if (failed.length > 0) {
     for (const item of failed) {
-      // Virtual archive-folder drags store a sentinel; replace it with the
-      // localized, actionable message instead of the raw marker.
-      const rawError = isSftpVirtualFolderUploadError(item.error)
-        ? t("sftp.upload.virtualFolderError")
-        : item.error;
+      const rawError = resolveSftpUploadErrorText(item.error, t);
       const errorMsg = rawError ? ` - ${rawError}` : "";
       toast.error(
         `${t("sftp.error.uploadFailed")}: ${item.fileName || t("sftp.upload")}${errorMsg}`,
