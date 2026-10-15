@@ -1,3 +1,5 @@
+import type { ProviderContinuation } from '../infrastructure/ai/providerContinuation';
+
 /**
  * Pure planning logic for "Fork from here": copy an AI chat session up to a
  * completed assistant response into a new session, leaving the original
@@ -21,7 +23,8 @@ export type ForkRefusalReason =
   | 'not-completed'
   | 'dangling-tool-call'
   | 'dangling-tool-result'
-  | 'compaction-covers-discarded';
+  | 'compaction-covers-discarded'
+  | 'source-output-reasoning';
 
 /** A message type that carries the fork-relevant subset (e.g. ChatMessage). */
 export type ForkMessageLike = {
@@ -29,7 +32,7 @@ export type ForkMessageLike = {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   thinking?: string;
-  providerContinuation?: unknown;
+  providerContinuation?: ProviderContinuation;
   toolCalls?: ReadonlyArray<{ id: string; name?: string; arguments?: Record<string, unknown> }>;
   toolResults?: ReadonlyArray<{ toolCallId: string; content?: string; isError?: boolean }>;
   errorInfo?: unknown;
@@ -62,6 +65,55 @@ const INCOMPLETE_EXECUTION_STATUSES = new Set([
   'failed',
   'cancelled',
 ]);
+
+function isCompletedResponse(message: ForkMessageLike): boolean {
+  return message.role === 'assistant'
+    && message.errorInfo == null
+    && message.statusText == null
+    && message.pendingApproval == null
+    && !INCOMPLETE_EXECUTION_STATUSES.has(message.executionStatus ?? '');
+}
+
+function hasSourceOutputReasoning(message: ForkMessageLike): boolean {
+  return (message.providerContinuation?.reasoningParts ?? []).some(
+    part => /\btool-output-[A-Za-z0-9-]+/.test(part.text),
+  );
+}
+
+/** Eligibility only: never copy/sanitize transcript content while rendering. */
+export function getForkableMessageIds(source: {
+  messages: readonly ForkMessageLike[];
+  contextCompaction?: ForkContextCompaction;
+}): Set<string> {
+  const ids = new Set<string>();
+  const pending = new Map<string, number>();
+  let pendingCount = 0;
+  let orphanResult = false;
+  let sourceOutputReasoning = false;
+  for (const [index, message] of source.messages.entries()) {
+    sourceOutputReasoning ||= hasSourceOutputReasoning(message);
+    for (const call of message.toolCalls ?? []) {
+      if (!call.id) continue;
+      pending.set(call.id, (pending.get(call.id) ?? 0) + 1);
+      pendingCount += 1;
+    }
+    for (const result of message.toolResults ?? []) {
+      if (!result.toolCallId) continue;
+      const count = pending.get(result.toolCallId) ?? 0;
+      if (count === 0) orphanResult = true;
+      else {
+        pending.set(result.toolCallId, count - 1);
+        pendingCount -= 1;
+      }
+    }
+    if (isCompletedResponse(message) && pendingCount === 0
+      && !orphanResult && !sourceOutputReasoning
+      && (source.contextCompaction?.compactedMessageCount ?? 0) <= index + 1) {
+      ids.add(message.id);
+    }
+  }
+  return ids;
+}
 
 /**
  * Validate that every tool call in the retained prefix is paired with a
@@ -163,17 +215,16 @@ export function planSessionFork<M extends ForkMessageLike>(
   if (boundaryIndex === -1) return { ok: false, reason: 'message-not-found' };
   const boundary = source.messages[boundaryIndex];
   if (boundary.role !== 'assistant') return { ok: false, reason: 'not-assistant' };
-  if (
-    boundary.errorInfo != null
-    || boundary.statusText != null
-    || boundary.pendingApproval != null
-    || (boundary.executionStatus != null
-      && INCOMPLETE_EXECUTION_STATUSES.has(boundary.executionStatus))
-  ) {
-    return { ok: false, reason: 'not-completed' };
-  }
+  if (!isCompletedResponse(boundary)) return { ok: false, reason: 'not-completed' };
 
   const retained = source.messages.slice(0, boundaryIndex + 1);
+
+  // Provider reasoning can be signed: replacing text or dropping only that
+  // block can invalidate its tool exchange. Refuse this cut without changing
+  // the source metadata rather than leaking an unusable source-only handle.
+  if (retained.some(hasSourceOutputReasoning)) {
+    return { ok: false, reason: 'source-output-reasoning' };
+  }
 
   const pairingRefusal = validateToolCallResultPairing(retained);
   if (pairingRefusal) return { ok: false, reason: pairingRefusal };
@@ -209,7 +260,5 @@ export function canForkFromMessage(
   },
   messageId: string,
 ): boolean {
-  // Only boundary validity matters here; the title is irrelevant for a
-  // boolean check so an empty placeholder is fine.
-  return planSessionFork({ title: '', messages: source.messages, contextCompaction: source.contextCompaction }, messageId).ok;
+  return getForkableMessageIds(source).has(messageId);
 }

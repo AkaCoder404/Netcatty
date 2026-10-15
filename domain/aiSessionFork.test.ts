@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildForkTitle,
   canForkFromMessage,
+  getForkableMessageIds,
   planSessionFork,
   stripMessageContinuationState,
 } from './aiSessionFork.ts';
@@ -244,4 +245,40 @@ test('fork removes source output handles only from tool_output_read arguments', 
 
   const other = msg({ toolCalls: [{ id: 'other', name: 'custom_tool', arguments: { handleId: 'tool-output-not-owned-here' } }] });
   assert.deepEqual(stripMessageContinuationState(other).toolCalls, other.toolCalls);
+});
+
+test('fork refuses source output references in provider reasoning without changing signed metadata', () => {
+  const continuation = { reasoningParts: [{ text: 'Read handleId=tool-output-source for details', providerOptions: { anthropic: { signature: 'valid-signature' } } }] };
+  const source = session([msg({ content: 'done', providerContinuation: continuation })]);
+  assert.deepEqual(planSessionFork(source, source.messages[0].id), { ok: false, reason: 'source-output-reasoning' });
+  assert.equal(canForkFromMessage(source, source.messages[0].id), false);
+  assert.equal(source.messages[0].providerContinuation, continuation);
+  assert.equal(continuation.reasoningParts[0].text, 'Read handleId=tool-output-source for details');
+});
+
+test('fork eligibility does not clone or scan retained message bodies', () => {
+  const assistant = msg({ content: 'completed' });
+  Object.defineProperty(assistant, 'content', { get() { throw new Error('eligibility should not build a transcript'); } });
+  assert.equal(canForkFromMessage(session([assistant]), assistant.id), true);
+});
+
+test('one-pass fork eligibility matches clicked-boundary validation', () => {
+  const messages = [
+    msg({ role: 'user', content: 'start' }),
+    msg({ content: 'first completed reply' }),
+    msg({ toolCalls: [{ id: 'reused' }, { id: 'reused' }] }),
+    msg({ role: 'tool', toolResults: [{ toolCallId: 'reused', content: 'one' }] }),
+    msg({ content: 'still unresolved' }),
+    msg({ role: 'tool', toolResults: [{ toolCallId: 'reused', content: 'two' }] }),
+    msg({ content: 'complete exchange' }),
+    msg({ executionStatus: 'failed' }),
+    msg({ content: 'unsafe reasoning', providerContinuation: { reasoningParts: [{ text: 'Read tool-output-source' }] } }),
+    msg({ content: 'after unsafe reasoning' }),
+  ];
+  for (const compactedMessageCount of [0, 3, messages.length]) {
+    const source = session(messages, { summary: 'summary', compactedMessageCount });
+    assert.deepEqual([...getForkableMessageIds(source)], messages.filter(message => planSessionFork(source, message.id).ok).map(message => message.id));
+  }
+  const orphan = session([msg({ role: 'tool', toolResults: [{ toolCallId: 'orphan' }] }), msg({ content: 'reply' })]);
+  assert.equal(getForkableMessageIds(orphan).size, 0);
 });

@@ -10,7 +10,7 @@ import { AlertCircle, BookOpen, FileText, GitFork, RotateCcw, SquareTerminal, X,
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../../application/i18n/I18nProvider';
 import type { AISessionContextCompaction, ChatMessage, ToolCall as AgentToolCall } from '../../infrastructure/ai/types';
-import { canForkFromMessage } from '../../domain/aiSessionFork';
+import { getForkableMessageIds } from '../../domain/aiSessionFork';
 import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
 import {
   Conversation,
@@ -413,17 +413,7 @@ const ChatMessageList: React.FC<ChatMessageListProps> = ({
   // compaction summary still accurate). Hidden entirely while a turn streams.
   const forkableMessageIds = useMemo(() => {
     if (!onForkFromMessage || isStreaming) return EMPTY_FORKABLE_SET;
-    const ids = new Set<string>();
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue;
-      if (canForkFromMessage(
-        { messages, contextCompaction: contextCompaction ?? undefined },
-        message.id,
-      )) {
-        ids.add(message.id);
-      }
-    }
-    return ids;
+    return getForkableMessageIds({ messages, contextCompaction: contextCompaction ?? undefined });
   }, [onForkFromMessage, isStreaming, messages, contextCompaction]);
 
   // While a jump target is active, re-resolve the tail against the current list
