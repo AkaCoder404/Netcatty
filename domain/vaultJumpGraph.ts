@@ -46,7 +46,9 @@ export function pruneVaultJumpHostReferences({
       if (!next) next = items.slice();
       next[index] = {
         ...item,
-        hostChain: nextHostIds.length > 0 ? { hostIds: nextHostIds } : undefined,
+        // Keep an explicit empty chain so a host/child group does not start
+        // using a different inherited jump chain after its last hop is removed.
+        hostChain: { hostIds: nextHostIds },
       };
     }
     return next ?? items;

@@ -484,59 +484,72 @@ for (const phase of ["snapshot", "commit"] as const) {
   });
 }
 
-test("group deletion prunes jump-chain references to hosts removed in the same transaction", async () => {
-  const actEnvironment = globalThis as typeof globalThis & {
-    IS_REACT_ACT_ENVIRONMENT?: boolean;
-  };
-  const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
-  actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+for (const mixedSelection of [false, true]) {
+  test(`group deletion prunes host and inherited chains, mixed selection: ${mixedSelection}`, async () => {
+    const actEnvironment = globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT?: boolean;
+    };
+    const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
 
-  const storedHosts = [
-    { id: "jump", group: "A", label: "jump", hostname: "j.example.com", port: 22, username: "root", protocol: "ssh" as const, tags: [], os: "linux" as const },
-    { id: "survivor", group: "B", label: "survivor", hostname: "s.example.com", port: 22, username: "root", protocol: "ssh" as const, tags: [], os: "linux" as const, hostChain: { hostIds: ["jump"] } },
-  ];
-  let deleteGroups: ((paths: Iterable<string>, deleteHosts?: boolean) => Promise<void>) | undefined;
-  let renderer: ReactTestRenderer | null = null;
-  let committedHosts: Array<{ id: string; hostChain?: { hostIds: string[] } }> = [];
+    const storedHosts = [
+      { id: "jump", group: "A", label: "jump", hostname: "j.example.com", port: 22, username: "root", protocol: "ssh" as const, tags: [], os: "linux" as const },
+      { id: "survivor", group: "B", label: "survivor", hostname: "s.example.com", port: 22, username: "root", protocol: "ssh" as const, tags: [], os: "linux" as const, hostChain: { hostIds: ["jump"] } },
+      { id: "extra", group: "B", label: "extra", hostname: "e.example.com", username: "root", tags: [], os: "linux" as const },
+      { id: "kept", group: "B", label: "kept", hostname: "k.example.com", username: "root", tags: [], os: "linux" as const },
+    ];
+    const configs: GroupConfig[] = [{ path: "B", hostChain: { hostIds: ["jump", "extra", "kept"] } }];
+    let deleteGroups: ReturnType<typeof useVaultGroupDeletion> | undefined;
+    let renderer: ReactTestRenderer | null = null;
+    let committedHosts: Array<{ id: string; hostChain?: { hostIds: string[] } }> = [];
+    let committedConfigs: GroupConfig[] = [];
 
-  const Probe = () => {
-    deleteGroups = useVaultGroupDeletion({
-      customGroups: ["A", "B"],
-      hosts: storedHosts,
-      groupConfigs: [],
-      managedSources: [],
-      onReadPersistedHosts: async () => storedHosts,
-      onReadPersistedManagedSources: () => [],
-      onCommitVaultGroupMutation: async (mutate) => {
-        const result = mutate({
-          groups: ["A", "B"],
-          configs: [],
-          hosts: storedHosts,
-          managedSources: [],
-          snippets: [],
-        });
-        if (result.ok) committedHosts = result.state.hosts;
-        return result;
-      },
-    });
-    return null;
-  };
+    const Probe = () => {
+      deleteGroups = useVaultGroupDeletion({
+        customGroups: ["A", "B"],
+        hosts: storedHosts,
+        groupConfigs: configs,
+        managedSources: [],
+        onReadPersistedHosts: async () => storedHosts,
+        onReadPersistedManagedSources: () => [],
+        onCommitVaultGroupMutation: async (mutate) => {
+          const result = mutate({
+            groups: ["A", "B"],
+            configs,
+            hosts: storedHosts,
+            managedSources: [],
+            snippets: [],
+          });
+          if (result.ok) {
+            committedHosts = result.state.hosts;
+            committedConfigs = result.state.configs;
+          }
+          return result;
+        },
+      });
+      return null;
+    };
 
-  try {
-    await act(async () => {
-      renderer = create(React.createElement(Probe));
-    });
-    await act(async () => {
-      await deleteGroups?.(["A"], true);
-    });
-  } finally {
-    await act(async () => {
-      renderer?.unmount();
-    });
-    actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
-  }
+    try {
+      await act(async () => {
+        renderer = create(React.createElement(Probe));
+      });
+      await act(async () => {
+        await deleteGroups?.(["A"], true, new Set(mixedSelection ? ["extra"] : []));
+      });
+    } finally {
+      await act(async () => {
+        renderer?.unmount();
+      });
+      actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+    }
 
-  assert.deepEqual(committedHosts.map(({ id, hostChain }) => ({ id, hostChain })), [
-    { id: "survivor", hostChain: undefined },
-  ]);
-});
+    assert.deepEqual(committedHosts.map(({ id, hostChain }) => ({ id, hostChain })), [
+      { id: "survivor", hostChain: { hostIds: [] } },
+      ...(!mixedSelection ? [{ id: "extra", hostChain: undefined }] : []),
+      { id: "kept", hostChain: undefined },
+    ]);
+    assert.deepEqual(committedConfigs[0].hostChain,
+      { hostIds: mixedSelection ? ["kept"] : ["extra", "kept"] });
+  });
+}
