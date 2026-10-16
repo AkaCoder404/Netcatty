@@ -1,4 +1,4 @@
-import type { Host, PortForwardingRule } from './models';
+import type { Host, PortForwardingMapping, PortForwardingRule } from './models';
 import { getNextVaultOrder } from './vaultOrder';
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -14,7 +14,58 @@ export const hasPortForwardingConnectionChanged = (
   || existing.remotePort !== updated.remotePort
   || existing.bindAddress !== updated.bindAddress
   || existing.hostId !== updated.hostId
+  || JSON.stringify(existing.mappings ?? []) !== JSON.stringify(updated.mappings ?? [])
 );
+
+/**
+ * Effective port pairs a rule forwards. Multi-mapping rules return their
+ * `mappings`; single-mapping rules derive the one pair from the scalar
+ * fields. `dynamic` rules have no destination pairs, so no mappings.
+ */
+export const getRuleMappings = (
+  rule: Pick<PortForwardingRule, 'type' | 'localPort' | 'remotePort' | 'mappings'>,
+): PortForwardingMapping[] => {
+  if (rule.type === 'dynamic') return [];
+  if (rule.mappings && rule.mappings.length > 1) return rule.mappings;
+  return [{ localPort: rule.localPort, remotePort: rule.remotePort! }];
+};
+
+export const normalizeRuleMappings = (
+  type: PortForwardingRule['type'],
+  value: unknown,
+): Result<PortForwardingMapping[]> => {
+  if (value === undefined) return { ok: true, value: [] };
+  let rows: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      rows = JSON.parse(value);
+    } catch {
+      return { ok: false, error: 'mappings must be a JSON array of { localPort, remotePort }.' };
+    }
+  }
+  if (!Array.isArray(rows)) {
+    return { ok: false, error: 'mappings must be an array of { localPort, remotePort }.' };
+  }
+  if (rows.length === 0) return { ok: true, value: [] };
+  if (type === 'dynamic') {
+    return { ok: false, error: 'mappings are not supported for dynamic forwarding.' };
+  }
+  const seenLocalPorts = new Set<number>();
+  const mappings: PortForwardingMapping[] = [];
+  for (const row of rows) {
+    const record = (row ?? {}) as Record<string, unknown>;
+    const localPort = parsePort(record.localPort, 'mappings localPort');
+    if ('error' in localPort) return localPort;
+    const remotePort = parsePort(record.remotePort, 'mappings remotePort');
+    if ('error' in remotePort) return remotePort;
+    if (seenLocalPorts.has(localPort.value)) {
+      return { ok: false, error: `Duplicate local port ${localPort.value} in mappings.` };
+    }
+    seenLocalPorts.add(localPort.value);
+    mappings.push({ localPort: localPort.value, remotePort: remotePort.value });
+  }
+  return { ok: true, value: mappings };
+};
 
 const parsePort = (value: unknown, name: string): Result<number> => {
   const parsed = typeof value === 'number' ? value : Number(String(value ?? ''));
@@ -69,6 +120,17 @@ function buildRule(
     if ('error' in parsedRemotePort) return { ok: false, error: parsedRemotePort.error };
     remotePort = parsedRemotePort.value;
   }
+  const parsedMappings = normalizeRuleMappings(
+    type,
+    source.mappings !== undefined ? source.mappings : existing?.mappings,
+  );
+  if ('error' in parsedMappings) return { ok: false, error: parsedMappings.error };
+  const mappings = parsedMappings.value;
+  // When mappings are provided they are authoritative; the first row is
+  // mirrored into the scalar fields so every existing reader (persistence,
+  // CLI schemas, bridge payloads) keeps working unchanged.
+  const effectiveLocalPort = mappings.length > 0 ? mappings[0].localPort : localPort.value;
+  const effectiveRemotePort = mappings.length > 0 ? mappings[0].remotePort : remotePort;
   if (!existing && !newRule) return { ok: false, error: 'New rule id and timestamp are required.' };
   const autoStartToggle = parseToggle(source.autoStart, 'autoStart');
   if ('error' in autoStartToggle) return autoStartToggle;
@@ -80,11 +142,12 @@ function buildRule(
     ok: true,
     value: {
       id: existing?.id ?? newRule!.id,
-      label: String(source.label ?? existing?.label ?? `${type} ${localPort.value}`).trim() || `${type} ${localPort.value}`,
+      label: String(source.label ?? existing?.label ?? `${type} ${effectiveLocalPort}`).trim() || `${type} ${effectiveLocalPort}`,
       type,
-      localPort: localPort.value,
+      localPort: effectiveLocalPort,
       bindAddress: String(source.bindAddress ?? existing?.bindAddress ?? '127.0.0.1').trim() || '127.0.0.1',
-      ...(type === 'dynamic' ? {} : { remoteHost, remotePort }),
+      ...(type === 'dynamic' ? {} : { remoteHost, remotePort: effectiveRemotePort }),
+      ...(mappings.length > 1 ? { mappings } : {}),
       hostId,
       autoStart,
       ...(autoReconnect === undefined ? {} : { autoReconnect }),

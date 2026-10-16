@@ -4,7 +4,7 @@
  * for establishing and managing SSH port forwarding tunnels.
  */
 
-import { Host, Identity, KnownHost, PortForwardingRule, SSHKey, TerminalSettings } from '../../domain/models';
+import { Host, Identity, KnownHost, PortForwardingRule, PortForwardingStatus, SSHKey, TerminalSettings } from '../../domain/models';
 import {
   isPortForwardingRuleStartable,
   isPortForwardingRuntimeBusy,
@@ -37,14 +37,35 @@ import { logger } from '../../lib/logger';
 import { localStorageAdapter } from '../persistence/localStorageAdapter';
 import { STORAGE_KEY_PF_RECONNECT_CANCEL } from '../config/storageKeys';
 import { netcattyBridge } from './netcattyBridge';
+import { getRuleMappings } from '../../domain/portForwardingAgentOps';
+import { computeAggregateRuleStatus } from '../../domain/portForwardingStatus';
+
+export interface PortForwardingMappingState {
+  // Mapping identity: the mapping's localPort, unique within the rule.
+  mappingId: number;
+  localPort: number;
+  remotePort?: number;
+  tunnelId: string;
+  // Per-tunnel bridge phases stay within the narrow union in practice; the
+  // wider type lets snapshot-fed assignments flow without narrowing casts.
+  status: PortForwardingStatus;
+  error?: string;
+  unsubscribe?: () => void;
+}
 
 export interface PortForwardingConnection {
   ruleId: string;
   tunnelId: string;
-  status: 'inactive' | 'connecting' | 'active' | 'error';
+  // Aggregate across mappings (`partial` only occurs for multi-mapping
+  // rules); per-tunnel bridge phases stay within the narrow union.
+  status: PortForwardingStatus;
   error?: string;
   unsubscribe?: () => void;
   locallyInitiated?: boolean;
+  // Per-mapping runtime for multi-mapping rules. `status`/`error` above hold
+  // the aggregate; mappings stay independent (one failed mapping must not
+  // affect the others).
+  mappings?: Map<number, PortForwardingMappingState>;
   // Reconnect state
   reconnectAttempts?: number;
   reconnectTimeoutId?: ReturnType<typeof setTimeout>;
@@ -300,6 +321,26 @@ export const getActiveConnection = (ruleId: string): PortForwardingConnection | 
   return activeConnections.get(ruleId);
 };
 
+const computeConnectionAggregate = (
+  connection: PortForwardingConnection,
+): PortForwardingConnection['status'] => {
+  if (!connection.mappings || connection.mappings.size === 0) return connection.status;
+  return computeAggregateRuleStatus(
+    Array.from(connection.mappings.values()).map((mapping) => mapping.status),
+  );
+};
+
+/**
+ * Per-mapping runtime states for a multi-mapping rule (empty for
+ * single-mapping rules). Read by the rule card to render one status dot per
+ * mapping.
+ */
+export const getRuleMappingStates = (ruleId: string): PortForwardingMappingState[] => {
+  const connection = activeConnections.get(ruleId);
+  if (!connection?.mappings) return [];
+  return Array.from(connection.mappings.values());
+};
+
 /**
  * Get all active connection rule IDs
  */
@@ -508,6 +549,9 @@ export const fetchPortForwardSnapshot = async (): Promise<{
     status: string;
     error?: string;
     cleanupRequired?: boolean;
+    mappingId?: number;
+    localPort?: number;
+    remotePort?: number;
   }>;
 }> => {
   const bridge = netcattyBridge.get();
@@ -529,6 +573,9 @@ export const fetchPortForwardSnapshot = async (): Promise<{
           status: record.phase,
           error: record.error,
           cleanupRequired: record.cleanupRequired,
+          ...(record.mappingId !== undefined
+            ? { mappingId: record.mappingId, localPort: record.localPort, remotePort: record.remotePort }
+            : {}),
         })),
       };
     } catch (err) {
@@ -598,6 +645,99 @@ const configureSyncedConnection = (
       backendSyncOptions.onStatusChange?.(ruleId, status, error);
     };
   }
+};
+
+type BackendTunnelRecord = {
+  ruleId?: string;
+  tunnelId: string;
+  status: string;
+  error?: string;
+  cleanupRequired?: boolean;
+  mappingId?: number;
+  localPort?: number;
+  remotePort?: number;
+};
+
+// Thin status handler for one mapping of a grouped (multi-mapping) synced
+// connection: updates the mapping entry and notifies with the aggregate.
+// Reconnect scheduling stays rule-level; the bridge reuses healthy mapping
+// tunnels when the rule restarts.
+const handleSyncedMappingStatus = (
+  ruleId: string,
+  mappingState: PortForwardingMappingState,
+  status: string,
+  error?: string,
+): void => {
+  const current = activeConnections.get(ruleId);
+  if (current?.mappings?.get(mappingState.mappingId) !== mappingState) return;
+  mappingState.status = resolveBackendStatus(status);
+  mappingState.error = error;
+  if (mappingState.status === 'inactive') {
+    mappingState.unsubscribe?.();
+    current.mappings?.delete(mappingState.mappingId);
+  }
+  const aggregate = computeConnectionAggregate(current);
+  current.status = aggregate;
+  if (mappingState.status !== 'inactive') current.error = error;
+
+  if (aggregate === 'error' || current.mappings?.size === 0) {
+    if (manualStopsInProgress.has(ruleId)) {
+      current.syncedOnStatusChange?.(aggregate, current.error);
+      return;
+    }
+    const reconnectScheduled = scheduleReconnectIfNeeded(
+      ruleId,
+      current.syncedShouldReconnect?.() === true,
+      (ruleStatus, ruleError) => current.syncedOnStatusChange?.(ruleStatus, ruleError),
+    );
+    if (reconnectScheduled) return;
+  }
+  current.syncedOnStatusChange?.(aggregate, current.error);
+};
+
+// Build a grouped connection for a rule whose snapshot records map to more
+// than one tunnel (one per mapping).
+const buildGroupedConnectionFromRecords = (
+  ruleId: string,
+  records: BackendTunnelRecord[],
+  reconnectAttempts: number,
+): PortForwardingConnection | undefined => {
+  const bridge = netcattyBridge.get();
+  const mappingStates = new Map<number, PortForwardingMappingState>();
+  const compositeUnsubscribes: Array<() => void> = [];
+  for (const record of records) {
+    const mappingId = record.mappingId ?? record.localPort;
+    if (mappingId === undefined) continue;
+    const mappingState: PortForwardingMappingState = {
+      mappingId,
+      localPort: record.localPort ?? mappingId,
+      ...(record.remotePort === undefined ? {} : { remotePort: record.remotePort }),
+      tunnelId: record.tunnelId,
+      status: resolveBackendStatus(record.status),
+      error: record.error,
+    };
+    mappingState.unsubscribe = bridge?.onPortForwardStatus?.(
+      record.tunnelId,
+      (status, error) => handleSyncedMappingStatus(ruleId, mappingState, status, error),
+    );
+    if (mappingState.unsubscribe) compositeUnsubscribes.push(mappingState.unsubscribe);
+    mappingStates.set(mappingId, mappingState);
+  }
+  if (mappingStates.size === 0) return undefined;
+  const firstError = records.find((record) => record.error)?.error;
+  const connection: PortForwardingConnection = {
+    ruleId,
+    tunnelId: records[0].tunnelId,
+    status: computeAggregateRuleStatus(
+      Array.from(mappingStates.values()).map((mapping) => mapping.status),
+    ),
+    error: firstError,
+    reconnectAttempts,
+    mappings: mappingStates,
+    unsubscribe: () => compositeUnsubscribes.forEach((fn) => fn()),
+  };
+  configureSyncedConnection(connection, ruleId);
+  return connection;
 };
 
 const subscribeSyncedConnection = async (
@@ -704,30 +844,54 @@ export const syncWithBackend = async (
     }
     logger.info(`[PortForwardingService] Backend reports ${snapshot.records.length} active tunnels`);
 
+    const recordsByRule = new Map<string, BackendTunnelRecord[]>();
     for (const tunnel of snapshot.records) {
       const ruleId = resolveBackendRuleId(tunnel);
       if (ruleId) {
-        const existing = activeConnections.get(ruleId);
-        if (existing?.tunnelId !== tunnel.tunnelId) existing?.unsubscribe?.();
-
-        // Update local connection tracking
-        const connection: PortForwardingConnection = existing?.tunnelId === tunnel.tunnelId
-          ? existing
-          : {
-              ruleId,
-              tunnelId: tunnel.tunnelId,
-              status: resolveBackendStatus(tunnel.status),
-              reconnectAttempts: existing?.reconnectAttempts ?? 0,
-            };
-        connection.status = resolveBackendStatus(tunnel.status);
-        connection.error = tunnel.error;
-        configureSyncedConnection(connection, ruleId);
-        activeConnections.set(ruleId, connection);
-
-        if (!await subscribeSyncedConnection(ruleId, connection)) continue;
-
-        logger.info(`[PortForwardingService] Synced active tunnel for rule ${ruleId}`);
+        const group = recordsByRule.get(ruleId) ?? [];
+        group.push(tunnel);
+        recordsByRule.set(ruleId, group);
       }
+    }
+
+    for (const [ruleId, ruleRecords] of recordsByRule) {
+      if (ruleRecords.length > 1) {
+        // Multi-mapping rule: group all its tunnels under one connection.
+        const existing = activeConnections.get(ruleId);
+        existing?.mappings?.forEach((mapping) => mapping.unsubscribe?.());
+        const grouped = buildGroupedConnectionFromRecords(
+          ruleId,
+          ruleRecords,
+          existing?.reconnectAttempts ?? 0,
+        );
+        if (!grouped) continue;
+        activeConnections.set(ruleId, grouped);
+        logger.info(
+          `[PortForwardingService] Synced ${grouped.mappings?.size ?? 0} mapping tunnels for rule ${ruleId}`,
+        );
+        continue;
+      }
+      const tunnel = ruleRecords[0];
+      const existing = activeConnections.get(ruleId);
+      if (existing?.tunnelId !== tunnel.tunnelId) existing?.unsubscribe?.();
+
+      // Update local connection tracking
+      const connection: PortForwardingConnection = existing?.tunnelId === tunnel.tunnelId
+        ? existing
+        : {
+            ruleId,
+            tunnelId: tunnel.tunnelId,
+            status: resolveBackendStatus(tunnel.status),
+            reconnectAttempts: existing?.reconnectAttempts ?? 0,
+          };
+      connection.status = resolveBackendStatus(tunnel.status);
+      connection.error = tunnel.error;
+      configureSyncedConnection(connection, ruleId);
+      activeConnections.set(ruleId, connection);
+
+      if (!await subscribeSyncedConnection(ruleId, connection)) continue;
+
+      logger.info(`[PortForwardingService] Synced active tunnel for rule ${ruleId}`);
     }
   } catch (err) {
     lastRuntimeAuthority = { available: false };
@@ -772,12 +936,88 @@ export const reconcileWithBackend = async (): Promise<{
     result.epoch = snapshot.epoch;
     result.revision = snapshot.revision;
     const backendRuleIds = new Set<string>();
-
+    const recordsByRule = new Map<string, BackendTunnelRecord[]>();
     for (const tunnel of snapshot.records) {
       const ruleId = resolveBackendRuleId(tunnel);
       if (ruleId) {
         backendRuleIds.add(ruleId);
+        const group = recordsByRule.get(ruleId) ?? [];
+        group.push(tunnel);
+        recordsByRule.set(ruleId, group);
+      }
+    }
 
+    for (const [ruleId, ruleRecords] of recordsByRule) {
+      const existing = activeConnections.get(ruleId);
+      const isGrouped = (existing?.mappings?.size ?? 0) > 0 || ruleRecords.length > 1;
+
+      if (isGrouped) {
+        if (!existing) {
+          // Case 2 (grouped): the backend runs several mapping tunnels for a
+          // rule this renderer does not track — adopt them as one connection.
+          const grouped = buildGroupedConnectionFromRecords(ruleId, ruleRecords, 0);
+          if (!grouped) continue;
+          activeConnections.set(ruleId, grouped);
+          result.appeared.push(ruleId);
+          continue;
+        }
+        // Case 3 (grouped): refresh each mapping entry from the snapshot;
+        // drop entries whose tunnel no longer exists, adopt records for
+        // mappings this renderer has not seen (statuses stay snapshot-fed).
+        existing.mappings ??= new Map();
+        const recordMappingIds = new Set(
+          ruleRecords
+            .map((record) => record.mappingId ?? record.localPort)
+            .filter((mappingId): mappingId is number => mappingId !== undefined),
+        );
+        const recordTunnelIds = new Set(ruleRecords.map((record) => record.tunnelId));
+        let changed = false;
+        for (const [mappingId, mapping] of Array.from(existing.mappings.entries())) {
+          // Failed mappings that never got a tunnel have an empty tunnelId:
+          // keep their error state until a restart replaces it.
+          if (!mapping.tunnelId) continue;
+          if (recordMappingIds.has(mappingId) || recordTunnelIds.has(mapping.tunnelId)) continue;
+          mapping.unsubscribe?.();
+          existing.mappings.delete(mappingId);
+          changed = true;
+        }
+        for (const record of ruleRecords) {
+          const mappingId = record.mappingId ?? record.localPort;
+          if (mappingId === undefined) continue;
+          const currentMapping = existing.mappings.get(mappingId);
+          const backendStatus = resolveBackendStatus(record.status);
+          if (!currentMapping) {
+            existing.mappings.set(mappingId, {
+              mappingId,
+              localPort: record.localPort ?? mappingId,
+              ...(record.remotePort === undefined ? {} : { remotePort: record.remotePort }),
+              tunnelId: record.tunnelId,
+              status: backendStatus,
+              error: record.error,
+            });
+            changed = true;
+          } else if (currentMapping.status !== backendStatus || currentMapping.error !== record.error) {
+            currentMapping.status = backendStatus;
+            currentMapping.error = record.error;
+            changed = true;
+          }
+        }
+        if (changed) {
+          const nextAggregate = computeAggregateRuleStatus(
+            Array.from(existing.mappings.values()).map((mapping) => mapping.status),
+          );
+          existing.status = nextAggregate;
+          existing.error = nextAggregate === 'active'
+            ? undefined
+            : ruleRecords.find((record) => record.error)?.error;
+          existing.syncedOnStatusChange?.(nextAggregate, existing.error);
+          result.appeared.push(ruleId);
+        }
+        continue;
+      }
+
+      const tunnel = ruleRecords[0];
+      {
         // Case 2: backend has it, renderer doesn't — insert it
         if (!activeConnections.has(ruleId)) {
           const connection: PortForwardingConnection = {
@@ -903,6 +1143,10 @@ export const startPortForward = async (
   try {
     // Generate a unique tunnel ID
     const tunnelId = `pf-${rule.id}-${Date.now()}`;
+    // Multi-mapping rules fan out to one bridge tunnel per mapping; the
+    // bridge shares one pooled SSH transport across them. The first mapping
+    // must match rule.localPort/remotePort.
+    const startMappings = getRuleMappings(rule);
 
     if (host.proxyProfileId && !host.proxyConfig) {
       throw new Error(`Saved proxy for host "${host.label || host.hostname}" is missing. Open host settings and select a valid proxy.`);
@@ -1034,6 +1278,75 @@ export const startPortForward = async (
       throw new Error('Saved credentials cannot be decrypted on this device. Open host settings and re-enter them.');
     }
 
+    // Status handler for one mapping of a multi-mapping rule: updates the
+    // mapping's record, recomputes the aggregate, and only tears the rule
+    // down when no mapping is left.
+    const handleMappingStatus = (
+      mappingState: PortForwardingMappingState,
+      status: PortForwardingRule['status'],
+      error?: string | null,
+    ): void => {
+      const conn = activeConnections.get(rule.id);
+      if (!conn || conn.mappings?.get(mappingState.mappingId) !== mappingState) return;
+      mappingState.status = status;
+      mappingState.error = error ?? undefined;
+      if (status !== 'connecting') conn.locallyInitiated = false;
+
+      if (status === 'inactive') {
+        mappingState.unsubscribe?.();
+        conn.mappings?.delete(mappingState.mappingId);
+        if (conn.mappings && conn.mappings.size > 0) {
+          const aggregate = computeConnectionAggregate(conn);
+          conn.status = aggregate;
+          conn.error = undefined;
+          onStatusChange(aggregate);
+          return;
+        }
+        // Last mapping went away: same lifecycle as a single-mapping rule.
+        if (conn.reconnectTimerCallback) {
+          conn.unsubscribe?.();
+          conn.unsubscribe = undefined;
+          return;
+        }
+        if (
+          !manualStopsInProgress.has(rule.id)
+          && !rulesPendingCleanup.has(rule.id)
+          && !exhaustedReconnectRules.has(rule.id)
+        ) {
+          const reconnectScheduled = scheduleReconnectIfNeeded(
+            rule.id,
+            enableReconnect,
+            onStatusChange,
+          );
+          if (reconnectScheduled) {
+            conn.unsubscribe?.();
+            conn.unsubscribe = undefined;
+            return;
+          }
+        }
+        conn.unsubscribe?.();
+        clearReconnectTimer(rule.id);
+        activeConnections.delete(rule.id);
+        onStatusChange('inactive');
+        return;
+      }
+
+      const aggregate = computeConnectionAggregate(conn);
+      conn.status = aggregate;
+      conn.error = error ?? undefined;
+
+      if (aggregate === 'error') {
+        if (stopAllInProgress.has(rule.id)) {
+          onStatusChange(aggregate, error ?? undefined);
+          return;
+        }
+        const reconnectScheduled = scheduleReconnectIfNeeded(rule.id, enableReconnect, onStatusChange);
+        if (reconnectScheduled) return;
+      }
+
+      onStatusChange(aggregate, aggregate === 'active' ? undefined : error ?? undefined);
+    };
+
     // Subscribe to status updates first
     const handleTunnelStatus = (status: PortForwardingRule['status'], error?: string | null) => {
       const conn = activeConnections.get(rule.id);
@@ -1111,6 +1424,7 @@ export const startPortForward = async (
       bindAddress: rule.bindAddress,
       remoteHost: rule.remoteHost,
       remotePort: rule.remotePort,
+      ...(startMappings.length > 1 ? { mappings: startMappings } : {}),
       hostname: host.hostname,
       hostId: host.id,
       port: host.port,
@@ -1137,6 +1451,82 @@ export const startPortForward = async (
       sshAuthReadyTimeoutMs: connectionTimeouts.authReadyTimeoutSeconds * 1000,
     });
     
+    // ---- multi-mapping result: one entry per requested mapping ----
+    if (result.mappings && result.mappings.length > 0) {
+      const previousConn = activeConnections.get(rule.id);
+      previousConn?.mappings?.forEach((mapping) => mapping.unsubscribe?.());
+      previousConn?.unsubscribe?.();
+
+      const anySucceeded = result.mappings.some((entry) => entry.success && entry.tunnelId);
+      if (result.cancelled || !anySucceeded) {
+        // Every mapping failed or the start was cancelled (rule deleted or
+        // replaced mid-handshake): the legacy single-mapping failure path.
+        unsubscribe?.();
+        if (result.cancelled) {
+          activeConnections.delete(rule.id);
+          onStatusChange('inactive');
+          return { success: false, error: undefined };
+        }
+        const reconnectScheduled = scheduleReconnectIfNeeded(rule.id, enableReconnect, onStatusChange);
+        if (reconnectScheduled) return { success: false, error: result.error };
+        activeConnections.delete(rule.id);
+        onStatusChange('error', result.error);
+        return { success: false, error: result.error };
+      }
+
+      // Keep every mapping: failed ones as error states so the aggregate
+      // surfaces `partial` and the UI can name the failed mapping.
+      const mappingStates = new Map<number, PortForwardingMappingState>();
+      const compositeUnsubscribes: Array<() => void> = [];
+      for (const entry of result.mappings) {
+        const mappingState: PortForwardingMappingState = {
+          mappingId: entry.mappingId,
+          localPort: entry.localPort,
+          ...(entry.remotePort === undefined ? {} : { remotePort: entry.remotePort }),
+          tunnelId: entry.tunnelId ?? '',
+          status: entry.success
+            ? (entry.status === 'error' || entry.status === 'inactive'
+              ? entry.status
+              : entry.status === 'active' ? 'active' : 'connecting')
+            : 'error',
+          ...(entry.success ? {} : { error: entry.error }),
+        };
+        if (entry.success && entry.tunnelId) {
+          mappingState.unsubscribe = bridge.onPortForwardStatus?.(
+            entry.tunnelId,
+            (status, error) => handleMappingStatus(mappingState, status, error),
+          );
+          if (mappingState.unsubscribe) compositeUnsubscribes.push(mappingState.unsubscribe);
+        }
+        mappingStates.set(entry.mappingId, mappingState);
+      }
+
+      const aggregate = computeAggregateRuleStatus(
+        Array.from(mappingStates.values()).map((mapping) => mapping.status),
+      );
+      activeConnections.set(rule.id, {
+        ruleId: rule.id,
+        tunnelId,
+        status: aggregate,
+        error: result.error,
+        unsubscribe: () => compositeUnsubscribes.forEach((fn) => fn()),
+        locallyInitiated: true,
+        reconnectAttempts: existingConn?.reconnectAttempts ?? 0,
+        mappings: mappingStates,
+      });
+      onStatusChange(aggregate, aggregate === 'active' ? undefined : result.error);
+
+      if (!result.success) {
+        // Partial: healthy mappings keep running; retry the failed ones
+        // through the bounded reconnect cycle. The bridge reuses live
+        // mapping tunnels, so healthy listeners are not rebound.
+        scheduleReconnectIfNeeded(rule.id, enableReconnect, onStatusChange);
+      } else {
+        exhaustedReconnectRules.delete(rule.id);
+      }
+      return { success: result.success, ...(result.error ? { error: result.error } : {}) };
+    }
+
     if (!result.success) {
       // Intentional cancellation (rule deleted/replaced during handshake).
       // Clean up quietly — no error state, no reconnect.

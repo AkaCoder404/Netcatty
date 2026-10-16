@@ -22,3 +22,26 @@ test("port forwarding bulk actions stay on start/stop all without selection chec
   assert.match(source, /stopAllTunnels\(/);
   assert.doesNotMatch(source, /selectedRuleIds|bulkDelete|type="checkbox"/);
 });
+
+test("port forwarding form supports multi-mapping rows with unique local ports", () => {
+  const newFormSource = readFileSync(
+    new URL("./port-forwarding/NewFormPanel.tsx", import.meta.url),
+    "utf8",
+  );
+  const editPanelSource = readFileSync(
+    new URL("./port-forwarding/EditPanel.tsx", import.meta.url),
+    "utf8",
+  );
+  // Both form panels render the shared mapping rows editor.
+  assert.match(newFormSource, /<MappingRows/);
+  assert.match(editPanelSource, /<MappingRows/);
+  // Draft carries working rows and validation rejects duplicate local ports.
+  assert.match(source, /mappingRows: \[\{ localPort: undefined, remotePort: undefined \}\]/);
+  assert.match(source, /seenLocalPorts\.has\(row\.localPort\)/);
+  // Saving persists mappings only past one row; row 0 mirrors the scalars.
+  assert.match(source, /mappings: rows\.map\(\(row\)/);
+  // Editing a rule seeds rows from its mappings.
+  assert.match(source, /getRuleMappings\(rule\)\.map/);
+  // Rule cards receive per-mapping runtime states.
+  assert.match(source, /getRuleMappingStates\(rule\.id\)/);
+});
