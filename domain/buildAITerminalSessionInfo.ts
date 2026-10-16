@@ -58,7 +58,7 @@ export const buildAITerminalSessionInfo = (
   const hostChain = summarizeHostChain(host, allHosts);
   const activePortForwards = host?.id && options?.portForwardingRules
     ? options.portForwardingRules
-      .filter((rule) => rule.hostId === host.id && (rule.status === 'active' || rule.status === 'connecting'))
+      .filter((rule) => rule.hostId === host.id && (rule.status === 'active' || rule.status === 'connecting' || rule.status === 'partial'))
       .map((rule) => ({
         ruleId: rule.id,
         label: rule.label,

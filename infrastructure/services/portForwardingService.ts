@@ -35,7 +35,7 @@ const FALLBACK_TERMINAL_SETTINGS = {
 };
 import { logger } from '../../lib/logger';
 import { localStorageAdapter } from '../persistence/localStorageAdapter';
-import { STORAGE_KEY_PF_RECONNECT_CANCEL } from '../config/storageKeys';
+import { STORAGE_KEY_PF_RECONNECT_CANCEL, STORAGE_KEY_PORT_FORWARDING } from '../config/storageKeys';
 import { netcattyBridge } from './netcattyBridge';
 import { getRuleMappings } from '../../domain/portForwardingAgentOps';
 import { computeAggregateRuleStatus } from '../../domain/portForwardingStatus';
@@ -680,7 +680,10 @@ const handleSyncedMappingStatus = (
   current.status = aggregate;
   if (mappingState.status !== 'inactive') current.error = error;
 
-  if (aggregate === 'error' || current.mappings?.size === 0) {
+  // A mapping lost while siblings remain is a partial failure: retry it
+  // through the bounded reconnect cycle, mirroring the partial-start path.
+  const lostMapping = mappingState.status === 'inactive' && (current.mappings?.size ?? 0) > 0;
+  if (lostMapping || aggregate === 'error' || aggregate === 'partial' || current.mappings?.size === 0) {
     if (manualStopsInProgress.has(ruleId)) {
       current.syncedOnStatusChange?.(aggregate, current.error);
       return;
@@ -696,7 +699,9 @@ const handleSyncedMappingStatus = (
 };
 
 // Build a grouped connection for a rule whose snapshot records map to more
-// than one tunnel (one per mapping).
+// than one tunnel (one per mapping). Records carrying a `mappingId` are
+// grouped even when only one tunnel survives, so a multi-mapping rule keeps
+// its per-mapping shape across renderer reloads.
 const buildGroupedConnectionFromRecords = (
   ruleId: string,
   records: BackendTunnelRecord[],
@@ -724,6 +729,29 @@ const buildGroupedConnectionFromRecords = (
     mappingStates.set(mappingId, mappingState);
   }
   if (mappingStates.size === 0) return undefined;
+  // Configured mappings with no surviving backend tunnel (e.g. one mapping
+  // hit EADDRINUSE before a renderer reload): keep them as error entries so
+  // the aggregate projects `partial` and the UI can name what is missing.
+  let storedRule: PortForwardingRule | undefined;
+  try {
+    storedRule = (localStorageAdapter.read<PortForwardingRule[]>(STORAGE_KEY_PORT_FORWARDING) ?? [])
+      .find((rule) => rule.id === ruleId);
+  } catch {
+    storedRule = undefined;
+  }
+  if (storedRule) {
+    for (const mapping of getRuleMappings(storedRule)) {
+      if (mappingStates.has(mapping.localPort)) continue;
+      mappingStates.set(mapping.localPort, {
+        mappingId: mapping.localPort,
+        localPort: mapping.localPort,
+        ...(mapping.remotePort === undefined ? {} : { remotePort: mapping.remotePort }),
+        tunnelId: '',
+        status: 'error',
+        error: 'This mapping is not running.',
+      });
+    }
+  }
   const firstError = records.find((record) => record.error)?.error;
   const connection: PortForwardingConnection = {
     ruleId,
@@ -855,10 +883,18 @@ export const syncWithBackend = async (
     }
 
     for (const [ruleId, ruleRecords] of recordsByRule) {
-      if (ruleRecords.length > 1) {
-        // Multi-mapping rule: group all its tunnels under one connection.
+      // Multi-mapping rule: group all its tunnels under one connection.
+      // Mapping records are detected by their `mappingId`, not by count —
+      // after a sibling mapping failed, only one backend tunnel survives.
+      const isGrouped = ruleRecords.length > 1
+        || ruleRecords.some((record) => record.mappingId !== undefined);
+      if (isGrouped) {
         const existing = activeConnections.get(ruleId);
-        existing?.mappings?.forEach((mapping) => mapping.unsubscribe?.());
+        if (existing?.mappings?.size) {
+          existing.mappings.forEach((mapping) => mapping.unsubscribe?.());
+        } else {
+          existing?.unsubscribe?.();
+        }
         const grouped = buildGroupedConnectionFromRecords(
           ruleId,
           ruleRecords,
@@ -866,6 +902,15 @@ export const syncWithBackend = async (
         );
         if (!grouped) continue;
         activeConnections.set(ruleId, grouped);
+        if (grouped.status === 'partial') {
+          // A configured mapping has no surviving tunnel: retry it through
+          // the bounded reconnect cycle (the bridge reuses the live ones).
+          scheduleReconnectIfNeeded(
+            ruleId,
+            grouped.syncedShouldReconnect?.() === true,
+            (status, error) => grouped.syncedOnStatusChange?.(status, error),
+          );
+        }
         logger.info(
           `[PortForwardingService] Synced ${grouped.mappings?.size ?? 0} mapping tunnels for rule ${ruleId}`,
         );
@@ -949,7 +994,11 @@ export const reconcileWithBackend = async (): Promise<{
 
     for (const [ruleId, ruleRecords] of recordsByRule) {
       const existing = activeConnections.get(ruleId);
-      const isGrouped = (existing?.mappings?.size ?? 0) > 0 || ruleRecords.length > 1;
+      // Mapping records are detected by their `mappingId`, not by count —
+      // after a sibling mapping failed, only one backend tunnel survives.
+      const isGrouped = (existing?.mappings?.size ?? 0) > 0
+        || ruleRecords.length > 1
+        || ruleRecords.some((record) => record.mappingId !== undefined);
 
       if (isGrouped) {
         if (!existing) {
@@ -1299,6 +1348,22 @@ export const startPortForward = async (
           const aggregate = computeConnectionAggregate(conn);
           conn.status = aggregate;
           conn.error = undefined;
+          // A mapping that stops while siblings remain is a partial failure:
+          // retry it through the bounded reconnect cycle (the bridge reuses
+          // the live mapping tunnels), mirroring the partial-start path.
+          if (
+            !manualStopsInProgress.has(rule.id)
+            && !stopAllInProgress.has(rule.id)
+            && !rulesPendingCleanup.has(rule.id)
+            && !exhaustedReconnectRules.has(rule.id)
+          ) {
+            const reconnectScheduled = scheduleReconnectIfNeeded(
+              rule.id,
+              enableReconnect,
+              onStatusChange,
+            );
+            if (reconnectScheduled) return;
+          }
           onStatusChange(aggregate);
           return;
         }
@@ -1335,11 +1400,14 @@ export const startPortForward = async (
       conn.status = aggregate;
       conn.error = error ?? undefined;
 
-      if (aggregate === 'error') {
+      if (aggregate === 'error' || aggregate === 'partial') {
         if (stopAllInProgress.has(rule.id)) {
           onStatusChange(aggregate, error ?? undefined);
           return;
         }
+        // Partial: a mapping failed while siblings keep forwarding. Retry the
+        // failed mappings through the bounded reconnect cycle, as the initial
+        // partial-start path does.
         const reconnectScheduled = scheduleReconnectIfNeeded(rule.id, enableReconnect, onStatusChange);
         if (reconnectScheduled) return;
       }

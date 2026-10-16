@@ -59,7 +59,7 @@ export const RuleCard: React.FC<RuleCardProps> = ({
 }) => {
     const { t } = useI18n();
     const isActive = rule.status === 'active';
-    const isStoppable = canStop || rule.status === 'active' || rule.status === 'connecting';
+    const isStoppable = canStop || rule.status === 'active' || rule.status === 'connecting' || rule.status === 'partial';
     // unknown/stale means we cannot trust inactive — do not offer Start until
     // an authoritative snapshot confirms there is no runtime.
     const isStartable = !isStoppable && (rule.status === 'inactive' || rule.status === 'error');

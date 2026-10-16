@@ -1,12 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { Host, PortForwardingRule } from "../../domain/models.ts";
+import { STORAGE_KEY_PORT_FORWARDING } from "../config/storageKeys.ts";
 import {
   getActiveConnection,
   getRuleMappingStates,
   reconcileWithBackend,
+  setReconnectCallback,
   startPortForward,
   stopAndCleanupRuleAndWait,
+  syncWithBackend,
 } from "./portForwardingService.ts";
 
 const host = (overrides: Partial<Host> = {}): Host => ({
@@ -204,6 +207,117 @@ test("the rule tears down when its last mapping goes inactive", async () => {
   bridge.fireStatus("pf-rule-multi-1-19090", "inactive");
   assert.equal(getActiveConnection("rule-multi"), undefined);
   assert.equal(statuses.at(-1), "inactive");
+});
+
+test("a mapping failure that leaves the rule partial schedules a reconnect", async (t) => {
+  const bridge = installMappingBridge(successResult);
+  setReconnectCallback(async () => ({ success: true }));
+  t.after(() => setReconnectCallback(null));
+
+  const statuses: string[] = [];
+  await startPortForward(
+    multiRule(),
+    host(),
+    [],
+    [],
+    [],
+    (status) => statuses.push(status),
+    true, // enableReconnect
+  );
+
+  bridge.fireStatus("pf-rule-multi-1-19090", "error", "listener died");
+
+  // The failed mapping stays recorded while the rule-level status flips to
+  // the reconnect countdown instead of being stranded as partial.
+  const connection = getActiveConnection("rule-multi");
+  assert.equal(connection?.status, "connecting");
+  assert.match(connection?.error ?? "", /Reconnecting/);
+  assert.equal(connection?.reconnectAttempts, 1);
+  assert.equal(connection?.mappings?.get(19090)?.status, "error");
+  assert.equal(getRuleMappingStates("rule-multi").length, 2);
+  t.after(() => stopAndCleanupRuleAndWait("rule-multi"));
+});
+
+test("a mapping that stops while siblings remain schedules a reconnect", async (t) => {
+  const bridge = installMappingBridge(successResult);
+  setReconnectCallback(async () => ({ success: true }));
+  t.after(() => setReconnectCallback(null));
+
+  await startPortForward(
+    multiRule(),
+    host(),
+    [],
+    [],
+    [],
+    () => {},
+    true, // enableReconnect
+  );
+
+  bridge.fireStatus("pf-rule-multi-1-19090", "inactive");
+
+  const connection = getActiveConnection("rule-multi");
+  assert.equal(connection?.status, "connecting");
+  assert.match(connection?.error ?? "", /Reconnecting/);
+  assert.equal(connection?.reconnectAttempts, 1);
+  t.after(() => stopAndCleanupRuleAndWait("rule-multi"));
+});
+
+test("sync groups a one-record mapping snapshot and projects the missing mapping as partial", async (t) => {
+  const previousLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const backing = new Map<string, string>([
+    [STORAGE_KEY_PORT_FORWARDING, JSON.stringify([multiRule()])],
+  ]);
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => backing.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        backing.set(key, value);
+      },
+      removeItem: (key: string) => {
+        backing.delete(key);
+      },
+    },
+  });
+  t.after(() => {
+    if (previousLocalStorage) Object.defineProperty(globalThis, "localStorage", previousLocalStorage);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  });
+
+  // Only one backend tunnel survived (the sibling hit EADDRINUSE before the
+  // renderer reloaded), but its mappingId still marks it as multi-mapping.
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      netcatty: {
+        getPortForwardSnapshot: async () => ({
+          epoch: "e1",
+          revision: 1,
+          records: [
+            {
+              ruleId: "rule-multi",
+              tunnelId: "pf-rule-multi-1-18080",
+              phase: "active",
+              mappingId: 18080,
+              localPort: 18080,
+              remotePort: 8080,
+            },
+          ],
+        }),
+        onPortForwardStatus: () => () => undefined,
+      },
+    },
+  });
+
+  await syncWithBackend();
+
+  const connection = getActiveConnection("rule-multi");
+  assert.equal(connection?.status, "partial");
+  assert.equal(connection?.mappings?.size, 2);
+  assert.equal(connection?.mappings?.get(18080)?.status, "active");
+  assert.equal(connection?.mappings?.get(19090)?.status, "error");
+  assert.equal(connection?.mappings?.get(19090)?.tunnelId, "");
+  t.after(() => stopAndCleanupRuleAndWait("rule-multi"));
 });
 
 test("reconcile groups snapshot records of one rule into one connection", async () => {

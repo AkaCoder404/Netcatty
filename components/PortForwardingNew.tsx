@@ -586,6 +586,26 @@ const PortForwarding: React.FC<PortForwardingProps> = ({
     return true;
   };
 
+  // Check if edit form is valid (same mapping-row rules as the create form)
+  const isEditFormValid = (): boolean => {
+    if (!editDraft.hostId) return false;
+    const rows = editDraft.mappingRows;
+    if (editDraft.type !== "dynamic" && rows && rows.length > 0) {
+      if (!editDraft.remoteHost) return false;
+      return areMappingRowsValid(editDraft.type, rows);
+    }
+    if (
+      !editDraft.localPort ||
+      editDraft.localPort <= 0 ||
+      editDraft.localPort >= 65536
+    )
+      return false;
+    if (editDraft.type !== "dynamic") {
+      if (!editDraft.remoteHost || !editDraft.remotePort) return false;
+    }
+    return true;
+  };
+
   // Edit existing rule - open edit panel
   const startEditRule = (rule: PortForwardingRule) => {
     setEditingRule(rule);
@@ -601,6 +621,8 @@ const PortForwarding: React.FC<PortForwardingProps> = ({
   // Save edited rule
   const saveEditedRule = () => {
     if (editingRule && editDraft.id) {
+      // Blank or duplicated mapping rows must not persist undefined ports.
+      if (!isEditFormValid()) return;
       const rows = editDraft.type !== "dynamic" ? (editDraft.mappingRows ?? []) : [];
       const firstRow = rows[0] ?? {};
       const { mappingRows: _omittedMappingRows, ...ruleFields } = editDraft;
@@ -1018,6 +1040,7 @@ const PortForwarding: React.FC<PortForwardingProps> = ({
             setEditDraft((prev) => ({ ...prev, ...updates }))
           }
           onSave={saveEditedRule}
+          saveDisabled={!isEditFormValid()}
           onClose={closeEditPanel}
           onDuplicate={() => {
             duplicateRule(editingRule.id);

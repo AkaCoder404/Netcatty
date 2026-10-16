@@ -31,6 +31,7 @@ export interface EditPanelProps extends AsidePanelResizeProps {
     hosts: Host[];
     onDraftChange: (updates: PortForwardingFormDraft) => void;
     onSave: () => void;
+    saveDisabled?: boolean;
     onClose: () => void;
     onDuplicate: () => void;
     onDelete: () => void;
@@ -44,6 +45,7 @@ export const EditPanel: React.FC<EditPanelProps> = ({
     hosts,
     onDraftChange,
     onSave,
+    saveDisabled = false,
     onClose,
     onDuplicate,
     onDelete,
@@ -206,6 +208,7 @@ export const EditPanel: React.FC<EditPanelProps> = ({
                 <Button
                     className="w-full h-10"
                     onClick={onSave}
+                    disabled={saveDisabled}
                 >
                     {t('common.saveChanges')}
                 </Button>
