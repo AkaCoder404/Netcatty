@@ -14,6 +14,7 @@ const keys = [
   'cloudSync.provider.disconnect.confirmAction',
   'cloudSync.provider.disconnect.toastTitle',
   'cloudSync.provider.disconnect.cloudRemains',
+  'cloudSync.provider.disconnect.failed',
 ] as const;
 
 test('disconnect copy exists in every bundled locale', () => {
@@ -32,8 +33,8 @@ test('disconnect confirm copy states that saved provider credentials are removed
     [en, 'will be removed'],
     [es, 'eliminarán'],
     [ru, 'будут удалены'],
-    [zhCN, '将被删除'],
-    [zhTW, '將被刪除'],
+    [zhCN, '删除'],
+    [zhTW, '刪除'],
   ] as const;
   for (const [messages, fragment] of expected) {
     assert.ok(
@@ -47,9 +48,17 @@ test('disconnect toast copy explains the cloud copy is retained', () => {
   for (const [locale, messages] of Object.entries({ en, ru, es, zhCN, zhTW })) {
     assert.ok(
       (messages['cloudSync.provider.disconnect.cloudRemains'] as string).includes(
-        locale === 'en' ? '{name}' : '{name}',
+        '{name}',
       ),
       `${locale} cloudRemains hint should reference the provider name`,
     );
+  }
+});
+
+test('disconnect copy distinguishes login cleanup from retained local data', () => {
+  assert.match(en['cloudSync.provider.disconnect.confirmMessage'], /backup history and sync encryption password stay here/);
+  assert.doesNotMatch(en['cloudSync.provider.disconnect.cloudRemains'], /change.*password/);
+  for (const messages of [en, ru, es, zhCN, zhTW]) {
+    assert.ok(messages['cloudSync.provider.disconnect.failed'].includes('{name}'));
   }
 });

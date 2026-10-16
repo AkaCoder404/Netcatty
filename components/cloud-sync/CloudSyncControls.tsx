@@ -279,7 +279,7 @@ interface ProviderCardProps {
     onEdit?: () => void;
     onConnect: () => void;
     onCancelConnect?: () => void;
-    onDisconnect: () => void;
+    onDisconnect: () => void | Promise<void>;
     onSync: () => void;
     extraActions?: React.ReactNode;
 }
@@ -304,6 +304,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 }) => {
     const { t } = useI18n();
     const [disconnectConfirmOpen, setDisconnectConfirmOpen] = useState(false);
+    const [disconnecting, setDisconnecting] = useState(false);
     const formatLastSyncLabel = (timestamp?: number): string => {
         if (!timestamp) return t('cloudSync.lastSync.never');
         const now = Date.now();
@@ -411,6 +412,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                             size="sm"
                             variant="ghost"
                             onClick={() => setDisconnectConfirmOpen(true)}
+                            disabled={disconnecting}
                             className="gap-1 text-muted-foreground hover:text-red-500"
                             aria-label={t('cloudSync.provider.disconnect')}
                         >
@@ -446,20 +448,25 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                 message={t('cloudSync.provider.disconnect.confirmMessage', { name })}
                 confirmLabel={t('cloudSync.provider.disconnect.confirmAction')}
                 destructive
-                onOpenChange={setDisconnectConfirmOpen}
+                busy={disconnecting}
+                onOpenChange={(open) => {
+                    if (!disconnecting) setDisconnectConfirmOpen(open);
+                }}
                 onConfirm={() => {
-                    setDisconnectConfirmOpen(false);
+                    setDisconnecting(true);
                     void Promise.resolve()
                         .then(() => onDisconnect())
                         .then(() => {
+                            setDisconnectConfirmOpen(false);
                             toast.info(t('cloudSync.provider.disconnect.cloudRemains', { name }), {
                                 title: t('cloudSync.provider.disconnect.toastTitle'),
                                 duration: 8000,
                             });
                         })
                         .catch(() => {
-                            /* failure is surfaced through the provider status / error UI */
-                        });
+                            toast.error(t('cloudSync.provider.disconnect.failed', { name }));
+                        })
+                        .finally(() => setDisconnecting(false));
                 }}
             />
         </div>
