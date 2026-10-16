@@ -82,6 +82,9 @@ test('provider disconnect waits for completion, reports failure and permits retr
     toast.info = info;
     toast.error = error;
     await renderer.unmount();
+    // Radix restores focus on a timer after unmount. Keep the DOM globals
+    // installed until that cleanup has dispatched its final event.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     for (const [key, descriptor] of previous) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
       else Reflect.deleteProperty(globalThis, key);
