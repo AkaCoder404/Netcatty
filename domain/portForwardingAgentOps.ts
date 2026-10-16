@@ -125,7 +125,32 @@ function buildRule(
     source.mappings !== undefined ? source.mappings : existing?.mappings,
   );
   if ('error' in parsedMappings) return { ok: false, error: parsedMappings.error };
-  const mappings = parsedMappings.value;
+  let mappings = parsedMappings.value;
+  // A scalar-only update to a multi-mapping rule patches the first row — the
+  // row the scalar fields mirror — instead of silently dropping the new
+  // ports. The result is re-validated for duplicate local ports.
+  if (
+    source.mappings === undefined
+    && mappings.length > 0
+    && (source.localPort !== undefined || source.remotePort !== undefined)
+  ) {
+    const patched = mappings.map((mapping, index) => index === 0
+      ? {
+          localPort: source.localPort !== undefined ? localPort.value : mapping.localPort,
+          remotePort: source.remotePort !== undefined && remotePort !== undefined
+            ? remotePort
+            : mapping.remotePort,
+        }
+      : mapping);
+    const seenLocalPorts = new Set<number>();
+    for (const mapping of patched) {
+      if (seenLocalPorts.has(mapping.localPort)) {
+        return { ok: false, error: `Duplicate local port ${mapping.localPort} in mappings.` };
+      }
+      seenLocalPorts.add(mapping.localPort);
+    }
+    mappings = patched;
+  }
   // When mappings are provided they are authoritative; the first row is
   // mirrored into the scalar fields so every existing reader (persistence,
   // CLI schemas, bridge payloads) keeps working unchanged.

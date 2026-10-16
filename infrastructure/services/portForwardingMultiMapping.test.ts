@@ -183,10 +183,16 @@ test("mapping status events route to the mapping and recompute the aggregate", a
   assert.equal(getActiveConnection("rule-multi")?.status, "partial");
   assert.ok(statuses.includes("partial"));
 
+  // Without auto-reconnect the lost mapping stays as a failed placeholder:
+  // the rule keeps reporting partial and naming the row instead of
+  // projecting fully active without it.
   bridge.fireStatus("pf-rule-multi-1-19090", "inactive");
   const connection = getActiveConnection("rule-multi");
-  assert.equal(connection?.status, "active");
-  assert.equal(connection?.mappings?.size, 1);
+  assert.equal(connection?.status, "partial");
+  assert.equal(connection?.mappings?.size, 2);
+  assert.equal(connection?.mappings?.get(19090)?.status, "error");
+  assert.equal(connection?.mappings?.get(19090)?.error, "listener died");
+  assert.equal(connection?.mappings?.get(19090)?.tunnelId, "");
   t.after(() => stopAndCleanupRuleAndWait("rule-multi"));
 });
 
@@ -242,7 +248,9 @@ test("a full multi-mapping recovery after a retry resets the reconnect counter",
   t.mock.timers.enable({ apis: ["setTimeout"] });
 
   let startCalls = 0;
-  const callbacks = new Map<string, (status: string, error?: string) => void>();
+  // Track a Set of listeners per tunnelId like the real preload API does, so
+  // leaked subscriptions from the replaced grouped connection are visible.
+  const listeners = new Map<string, Set<(status: string, error?: string) => void>>();
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
@@ -303,8 +311,15 @@ test("a full multi-mapping recovery after a retry resets the reconnect counter",
           tunnelId: string,
           cb: (status: string, error?: string) => void,
         ) => {
-          callbacks.set(tunnelId, cb);
-          return () => callbacks.delete(tunnelId);
+          let bucket = listeners.get(tunnelId);
+          if (!bucket) {
+            bucket = new Set();
+            listeners.set(tunnelId, bucket);
+          }
+          bucket.add(cb);
+          return () => {
+            bucket.delete(cb);
+          };
         },
         stopPortForwardByRuleId: async () => ({ stopped: 2, failed: 0, errors: [] }),
       },
@@ -336,6 +351,9 @@ test("a full multi-mapping recovery after a retry resets the reconnect counter",
   assert.equal(connection?.status, "active");
   assert.equal(connection?.reconnectAttempts, 0);
   assert.equal(connection?.mappings?.size, 2);
+  // The replaced grouped connection released its per-mapping listeners: the
+  // reused tunnel must have exactly one subscriber after the retry, not two.
+  assert.equal(listeners.get("pf-rule-retry-1-18080")?.size, 1);
 
   t.mock.timers.reset();
   await stopAndCleanupRuleAndWait("rule-retry");
@@ -421,6 +439,36 @@ test("sync groups a one-record mapping snapshot and projects the missing mapping
   assert.equal(connection?.mappings?.get(19090)?.status, "error");
   assert.equal(connection?.mappings?.get(19090)?.tunnelId, "");
   t.after(() => stopAndCleanupRuleAndWait("rule-multi"));
+});
+
+test("reconcile keeps a disappeared mapping as a failed placeholder", async () => {
+  let records: Array<Record<string, unknown>> = [
+    { ruleId: "rule-recon", tunnelId: "pf-recon-1-18080", phase: "active", mappingId: 18080, localPort: 18080, remotePort: 8080 },
+    { ruleId: "rule-recon", tunnelId: "pf-recon-1-19090", phase: "active", mappingId: 19090, localPort: 19090, remotePort: 9090 },
+  ];
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      netcatty: {
+        getPortForwardSnapshot: async () => ({ epoch: "e1", revision: 1, records }),
+        onPortForwardStatus: () => () => undefined,
+      },
+    },
+  });
+
+  await reconcileWithBackend();
+  assert.equal(getActiveConnection("rule-recon")?.status, "active");
+
+  // The second mapping's tunnel disappears while the sibling stays active.
+  records = records.slice(0, 1);
+  await reconcileWithBackend();
+
+  const connection = getActiveConnection("rule-recon");
+  assert.equal(connection?.status, "partial");
+  assert.equal(connection?.mappings?.size, 2);
+  assert.equal(connection?.mappings?.get(18080)?.status, "active");
+  assert.equal(connection?.mappings?.get(19090)?.status, "error");
+  assert.equal(connection?.mappings?.get(19090)?.tunnelId, "");
 });
 
 test("reconcile groups snapshot records of one rule into one connection", async () => {

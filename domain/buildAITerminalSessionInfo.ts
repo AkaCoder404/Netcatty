@@ -1,5 +1,6 @@
 import { classifyDistroId, resolveHostOs } from './host';
 import { isSavedVaultHost } from './ephemeralHosts';
+import { getRuleMappings } from './portForwardingAgentOps';
 import type { PortForwardingRule } from './models';
 import type { Host, TerminalSession } from '../types';
 
@@ -59,13 +60,27 @@ export const buildAITerminalSessionInfo = (
   const activePortForwards = host?.id && options?.portForwardingRules
     ? options.portForwardingRules
       .filter((rule) => rule.hostId === host.id && (rule.status === 'active' || rule.status === 'connecting' || rule.status === 'partial'))
-      .map((rule) => ({
-        ruleId: rule.id,
-        label: rule.label,
-        type: rule.type,
-        localPort: rule.localPort,
-        status: rule.status,
-      }))
+      // One item per mapping so every live listener reaches AI context;
+      // single-mapping and dynamic rules keep the legacy scalar entry.
+      .flatMap((rule) => {
+        const mappings = getRuleMappings(rule);
+        if (mappings.length === 0) {
+          return [{
+            ruleId: rule.id,
+            label: rule.label,
+            type: rule.type,
+            localPort: rule.localPort,
+            status: rule.status,
+          }];
+        }
+        return mappings.map((mapping) => ({
+          ruleId: rule.id,
+          label: rule.label,
+          type: rule.type,
+          localPort: mapping.localPort,
+          status: rule.status,
+        }));
+      })
     : undefined;
   // Mosh / ET sessions always run over a shell-backed PTY and cannot reach a
   // vendor CLI, so network device mode never applies to them.

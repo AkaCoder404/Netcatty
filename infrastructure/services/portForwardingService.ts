@@ -331,6 +331,32 @@ const computeConnectionAggregate = (
 };
 
 /**
+ * A mapping whose tunnel disappeared while siblings remain live is kept as a
+ * failed placeholder (empty tunnelId) so the aggregate stays `partial` and
+ * the UI keeps naming the missing row instead of silently dropping it.
+ */
+const markMappingLost = (
+  mappingState: PortForwardingMappingState,
+  error?: string | null,
+): void => {
+  mappingState.unsubscribe?.();
+  mappingState.unsubscribe = undefined;
+  mappingState.tunnelId = '';
+  mappingState.status = 'error';
+  mappingState.error = error ?? mappingState.error ?? 'This mapping is not running.';
+};
+
+/** Whether another mapping of the connection is still live. */
+const hasLiveMappingSibling = (
+  connection: PortForwardingConnection,
+  mappingState: PortForwardingMappingState,
+): boolean =>
+  Array.from(connection.mappings?.values() ?? []).some(
+    (mapping) => mapping !== mappingState
+      && (mapping.status === 'active' || mapping.status === 'connecting'),
+  );
+
+/**
  * Per-mapping runtime states for a multi-mapping rule (empty for
  * single-mapping rules). Read by the rule card to render one status dot per
  * mapping.
@@ -671,19 +697,24 @@ const handleSyncedMappingStatus = (
   const current = activeConnections.get(ruleId);
   if (current?.mappings?.get(mappingState.mappingId) !== mappingState) return;
   mappingState.status = resolveBackendStatus(status);
-  mappingState.error = error;
+  if (mappingState.status !== 'inactive') mappingState.error = error;
   if (mappingState.status === 'inactive') {
-    mappingState.unsubscribe?.();
-    current.mappings?.delete(mappingState.mappingId);
+    if (hasLiveMappingSibling(current, mappingState)) {
+      // Keep the lost mapping as a failed placeholder so the aggregate stays
+      // partial and the failed row remains visible.
+      markMappingLost(mappingState, error);
+    } else {
+      mappingState.unsubscribe?.();
+      current.mappings?.delete(mappingState.mappingId);
+    }
   }
   const aggregate = computeConnectionAggregate(current);
   current.status = aggregate;
-  if (mappingState.status !== 'inactive') current.error = error;
+  if (mappingState.status !== 'inactive') current.error = mappingState.error;
 
   // A mapping lost while siblings remain is a partial failure: retry it
   // through the bounded reconnect cycle, mirroring the partial-start path.
-  const lostMapping = mappingState.status === 'inactive' && (current.mappings?.size ?? 0) > 0;
-  if (lostMapping || aggregate === 'error' || aggregate === 'partial' || current.mappings?.size === 0) {
+  if (aggregate === 'error' || aggregate === 'partial' || current.mappings?.size === 0) {
     if (manualStopsInProgress.has(ruleId)) {
       current.syncedOnStatusChange?.(aggregate, current.error);
       return;
@@ -1026,8 +1057,11 @@ export const reconcileWithBackend = async (): Promise<{
           // keep their error state until a restart replaces it.
           if (!mapping.tunnelId) continue;
           if (recordMappingIds.has(mappingId) || recordTunnelIds.has(mapping.tunnelId)) continue;
-          mapping.unsubscribe?.();
-          existing.mappings.delete(mappingId);
+          // The rule still has backend records, so this is a single lost
+          // mapping, not a rule stop (Case 1 removes whole rules): keep a
+          // failed placeholder so the aggregate stays partial and the row
+          // remains visible until a restart replaces it.
+          markMappingLost(mapping);
           changed = true;
         }
         for (const record of ruleRecords) {
@@ -1059,6 +1093,19 @@ export const reconcileWithBackend = async (): Promise<{
           existing.error = nextAggregate === 'active'
             ? undefined
             : ruleRecords.find((record) => record.error)?.error;
+          if (nextAggregate === 'partial' || nextAggregate === 'error') {
+            // Lost mappings surface here before any status event arrives:
+            // retry them through the bounded reconnect cycle.
+            const reconnectScheduled = scheduleReconnectIfNeeded(
+              ruleId,
+              existing.syncedShouldReconnect?.() === true,
+              (ruleStatus, ruleError) => existing.syncedOnStatusChange?.(ruleStatus, ruleError),
+            );
+            if (reconnectScheduled) {
+              result.appeared.push(ruleId);
+              continue;
+            }
+          }
           existing.syncedOnStatusChange?.(nextAggregate, existing.error);
           result.appeared.push(ruleId);
         }
@@ -1338,19 +1385,19 @@ export const startPortForward = async (
       const conn = activeConnections.get(rule.id);
       if (!conn || conn.mappings?.get(mappingState.mappingId) !== mappingState) return;
       mappingState.status = status;
-      mappingState.error = error ?? undefined;
+      if (status !== 'inactive') mappingState.error = error ?? undefined;
       if (status !== 'connecting') conn.locallyInitiated = false;
 
       if (status === 'inactive') {
-        mappingState.unsubscribe?.();
-        conn.mappings?.delete(mappingState.mappingId);
-        if (conn.mappings && conn.mappings.size > 0) {
+        if (hasLiveMappingSibling(conn, mappingState)) {
+          // Keep the lost mapping as a failed placeholder so the aggregate
+          // stays partial and the failed row remains visible; then retry it
+          // through the bounded reconnect cycle (the bridge reuses the live
+          // mapping tunnels), mirroring the partial-start path.
+          markMappingLost(mappingState, error);
           const aggregate = computeConnectionAggregate(conn);
           conn.status = aggregate;
           conn.error = undefined;
-          // A mapping that stops while siblings remain is a partial failure:
-          // retry it through the bounded reconnect cycle (the bridge reuses
-          // the live mapping tunnels), mirroring the partial-start path.
           if (
             !manualStopsInProgress.has(rule.id)
             && !stopAllInProgress.has(rule.id)
@@ -1367,7 +1414,9 @@ export const startPortForward = async (
           onStatusChange(aggregate);
           return;
         }
-        // Last mapping went away: same lifecycle as a single-mapping rule.
+        // No live sibling left: same lifecycle as a single-mapping rule.
+        mappingState.unsubscribe?.();
+        conn.mappings?.delete(mappingState.mappingId);
         if (conn.reconnectTimerCallback) {
           conn.unsubscribe?.();
           conn.unsubscribe = undefined;
@@ -1471,6 +1520,14 @@ export const startPortForward = async (
     
     // Store connection info (preserve reconnect attempts if this is a reconnect)
     const existingConn = activeConnections.get(rule.id);
+    if (existingConn?.mappings?.size) {
+      // Replacing a grouped connection (e.g. a partial-rule retry): release
+      // its per-mapping listeners. Reused bridge tunnels keep emitting, and
+      // stale handlers no longer match this temporary connection anyway, so
+      // every retry would otherwise leak one callback per mapping.
+      existingConn.mappings.forEach((mapping) => mapping.unsubscribe?.());
+      existingConn.unsubscribe?.();
+    }
     activeConnections.set(rule.id, {
       ruleId: rule.id,
       tunnelId,
