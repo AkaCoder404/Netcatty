@@ -238,6 +238,109 @@ test("a mapping failure that leaves the rule partial schedules a reconnect", asy
   t.after(() => stopAndCleanupRuleAndWait("rule-multi"));
 });
 
+test("a full multi-mapping recovery after a retry resets the reconnect counter", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  let startCalls = 0;
+  const callbacks = new Map<string, (status: string, error?: string) => void>();
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      netcatty: {
+        startPortForward: async () => {
+          startCalls += 1;
+          if (startCalls === 1) {
+            // First attempt: one mapping occupied, one live.
+            return {
+              success: false,
+              error: "listen EADDRINUSE: address already in use",
+              tunnelId: "pf-rule-retry-1",
+              mappings: [
+                {
+                  mappingId: 18080,
+                  localPort: 18080,
+                  remotePort: 8080,
+                  tunnelId: "pf-rule-retry-1-18080",
+                  success: true,
+                  status: "active",
+                },
+                {
+                  mappingId: 19090,
+                  localPort: 19090,
+                  remotePort: 9090,
+                  success: false,
+                  error: "listen EADDRINUSE: address already in use",
+                },
+              ],
+            };
+          }
+          // Retry: the bridge reused the live mapping and bound the other.
+          return {
+            success: true,
+            tunnelId: "pf-rule-retry-2",
+            mappings: [
+              {
+                mappingId: 18080,
+                localPort: 18080,
+                remotePort: 8080,
+                tunnelId: "pf-rule-retry-1-18080",
+                success: true,
+                status: "active",
+                reused: true,
+              },
+              {
+                mappingId: 19090,
+                localPort: 19090,
+                remotePort: 9090,
+                tunnelId: "pf-rule-retry-2-19090",
+                success: true,
+                status: "active",
+              },
+            ],
+          };
+        },
+        onPortForwardStatus: (
+          tunnelId: string,
+          cb: (status: string, error?: string) => void,
+        ) => {
+          callbacks.set(tunnelId, cb);
+          return () => callbacks.delete(tunnelId);
+        },
+        stopPortForwardByRuleId: async () => ({ stopped: 2, failed: 0, errors: [] }),
+      },
+    },
+  });
+
+  setReconnectCallback(async (ruleId, onStatusChange) =>
+    startPortForward(multiRule({ id: ruleId }), host(), [], [], [], onStatusChange, true));
+  t.after(() => setReconnectCallback(null));
+
+  await startPortForward(
+    multiRule({ id: "rule-retry" }),
+    host(),
+    [],
+    [],
+    [],
+    () => {},
+    true, // enableReconnect
+  );
+  assert.equal(getActiveConnection("rule-retry")?.reconnectAttempts, 1);
+
+  // Fire the scheduled reconnect and let the async restart settle.
+  t.mock.timers.tick(3000);
+  for (let i = 0; i < 10; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  const connection = getActiveConnection("rule-retry");
+  assert.equal(connection?.status, "active");
+  assert.equal(connection?.reconnectAttempts, 0);
+  assert.equal(connection?.mappings?.size, 2);
+
+  t.mock.timers.reset();
+  await stopAndCleanupRuleAndWait("rule-retry");
+});
+
 test("a mapping that stops while siblings remain schedules a reconnect", async (t) => {
   const bridge = installMappingBridge(successResult);
   setReconnectCallback(async () => ({ success: true }));

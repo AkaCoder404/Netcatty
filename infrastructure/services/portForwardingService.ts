@@ -1579,7 +1579,10 @@ export const startPortForward = async (
         error: result.error,
         unsubscribe: () => compositeUnsubscribes.forEach((fn) => fn()),
         locallyInitiated: true,
-        reconnectAttempts: existingConn?.reconnectAttempts ?? 0,
+        // A fully successful (re)start clears the retry budget, matching the
+        // single-tunnel success path; partial starts keep it so the bounded
+        // retry cycle for the failed mappings continues.
+        reconnectAttempts: result.success ? 0 : (existingConn?.reconnectAttempts ?? 0),
         mappings: mappingStates,
       });
       onStatusChange(aggregate, aggregate === 'active' ? undefined : result.error);

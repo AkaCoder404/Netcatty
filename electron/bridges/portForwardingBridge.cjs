@@ -281,6 +281,19 @@ function isLocalBindFailure(err) {
     || message.includes("listen");
 }
 
+// Per-mapping bind failures let the remaining mappings start (OpenSSH
+// ExitOnForwardFailure=no). Local/dynamic binds fail with EADDR*/listen
+// errors; remote binds fail the tcpip-forward request on the server, which
+// ssh2 reports as "Unable to bind to <addr>:<port>".
+function isMappingBindFailure(type, err) {
+  if (isLocalBindFailure(err)) return true;
+  if (type === "remote") {
+    const message = String(err?.message || "").toLowerCase();
+    return message.includes("unable to bind");
+  }
+  return false;
+}
+
 function destroyTunnelPipeEndpoint(endpoint) {
   if (!endpoint) return;
   try { endpoint.destroy?.(); } catch { /* ignore */ }
@@ -655,7 +668,9 @@ function bindPortForwardChannels({
           portForwardingTunnels.set(tunnelId, tunnelState);
           sendStatus?.("active");
           settled = true;
-          resolve({ tunnelId, success: true });
+          // Report the already-emitted status with the result: per-mapping
+          // listeners installed by callers miss the earlier "active" event.
+          resolve({ tunnelId, success: true, status: "active" });
         } catch (regErr) {
           try { server.close(); } catch { /* ignore */ }
           fail(regErr);
@@ -768,7 +783,9 @@ function bindPortForwardChannels({
             portForwardingTunnels.set(tunnelId, tunnelState);
             sendStatus?.("active");
             settled = true;
-            resolve({ tunnelId, success: true });
+            // Report the already-emitted status with the result: per-mapping
+            // listeners installed by callers miss the earlier "active" event.
+            resolve({ tunnelId, success: true, status: "active" });
           } catch (regErr) {
             try { conn.removeListener("tcp connection", onTcpConnection); } catch { /* ignore */ }
             const transport = tunnelState.connRef || null;
@@ -893,7 +910,9 @@ function bindPortForwardChannels({
           portForwardingTunnels.set(tunnelId, tunnelState);
           sendStatus?.("active");
           settled = true;
-          resolve({ tunnelId, success: true });
+          // Report the already-emitted status with the result: per-mapping
+          // listeners installed by callers miss the earlier "active" event.
+          resolve({ tunnelId, success: true, status: "active" });
         } catch (regErr) {
           try { server.close(); } catch { /* ignore */ }
           fail(regErr);
@@ -1852,7 +1871,7 @@ async function startPortForward(event, payload) {
         firstFailure = mappingResult.error || 'Port forward failed.';
       }
       const bindLikeFailure = !mappingResult.cancelled
-        && isLocalBindFailure({ message: mappingResult.error || '' });
+        && isMappingBindFailure(type, { message: mappingResult.error || '' });
       if (mappingResult.cancelled) cancelled = true;
       if (!bindLikeFailure) break;
     }

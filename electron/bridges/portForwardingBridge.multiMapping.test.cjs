@@ -237,3 +237,128 @@ test("dynamic forwarding rejects mapping lists", async (t) => {
   );
   assert.equal((await bridge.listPortForwards(event, {})).length, 0);
 });
+
+test("fresh multi-mapping successes report their active status with the result", async (t) => {
+  resetSshTransportRegistryForTests({ defaultIdleTtlMs: 0 });
+  t.after(() => resetSshTransportRegistryForTests({ defaultIdleTtlMs: 0 }));
+  const bridge = loadBridgeWithMocks(t);
+  const event = { sender: createSender() };
+  const portA = await reservePort();
+  const portB = await reservePort();
+
+  try {
+    const result = await bridge.startPortForward(event, {
+      ...basePayload,
+      tunnelId: "pf-multi-5",
+      ruleId: "rule-fresh-status",
+      localPort: portA,
+      mappings: [
+        { localPort: portA, remotePort: 3306 },
+        { localPort: portB, remotePort: 3307 },
+      ],
+    });
+
+    assert.equal(result.success, true);
+    // The "active" event fired before callers could subscribe per-mapping
+    // listeners, so the status must travel with the result entries.
+    assert.ok(result.mappings.every((mapping) => mapping.status === "active"));
+  } finally {
+    await bridge.stopPortForwardByRuleId(event, { ruleId: "rule-fresh-status" });
+  }
+  assert.equal((await bridge.listPortForwards(event, {})).length, 0);
+});
+
+function loadBridgeWithRemoteMocks(t, { unbindablePorts = new Set() } = {}) {
+  const originalLoad = Module._load;
+
+  class MockRemoteSshClient extends EventEmitter {
+    constructor() {
+      super();
+      this.socketTimeouts = [];
+      this._sock = { setTimeout: (value) => this.socketTimeouts.push(value) };
+    }
+
+    connect() {
+      setImmediate(() => {
+        this.emit("connect");
+        this.emit("ready");
+      });
+    }
+
+    forwardIn(bindAddress, port, callback) {
+      setImmediate(() => {
+        if (unbindablePorts.has(port)) {
+          // What ssh2 reports when the server rejects tcpip-forward.
+          callback(new Error(`Unable to bind to ${bindAddress}:${port}`));
+          return;
+        }
+        callback(null);
+      });
+    }
+
+    unforwardIn(_bindAddress, _port, callback) {
+      if (callback) setImmediate(() => callback(null));
+    }
+
+    end() {
+      setImmediate(() => this.emit("close"));
+    }
+  }
+
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === "ssh2") {
+      return { Client: MockRemoteSshClient, utils: { parseKey: () => null } };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  const bridgePath = require.resolve("./portForwardingBridge.cjs");
+  delete require.cache[bridgePath];
+  const bridge = require("./portForwardingBridge.cjs");
+
+  t.after(() => {
+    Module._load = originalLoad;
+    delete require.cache[bridgePath];
+  });
+
+  return bridge;
+}
+
+test("a remote bind failure fails only its own mapping; later mappings still start", async (t) => {
+  resetSshTransportRegistryForTests({ defaultIdleTtlMs: 0 });
+  t.after(() => resetSshTransportRegistryForTests({ defaultIdleTtlMs: 0 }));
+  const blockedPort = await reservePort();
+  const freePort = await reservePort();
+  const bridge = loadBridgeWithRemoteMocks(t, { unbindablePorts: new Set([blockedPort]) });
+  const event = { sender: createSender() };
+
+  try {
+    const result = await bridge.startPortForward(event, {
+      ...basePayload,
+      type: "remote",
+      tunnelId: "pf-multi-remote-1",
+      ruleId: "rule-remote-partial",
+      localPort: blockedPort,
+      mappings: [
+        { localPort: blockedPort, remotePort: 3306 },
+        { localPort: freePort, remotePort: 3307 },
+      ],
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.mappings.length, 2);
+    const failed = result.mappings.find((mapping) => mapping.mappingId === blockedPort);
+    const live = result.mappings.find((mapping) => mapping.mappingId === freePort);
+    assert.equal(failed.success, false);
+    assert.match(failed.error ?? "", /unable to bind/i);
+    assert.equal(live.success, true);
+    assert.equal(live.status, "active");
+
+    const tunnels = await bridge.listPortForwards(event, {});
+    assert.equal(tunnels.length, 1);
+    assert.equal(tunnels[0].ruleId, "rule-remote-partial");
+  } finally {
+    await bridge.stopPortForwardByRuleId(event, { ruleId: "rule-remote-partial" });
+  }
+  assert.equal((await bridge.listPortForwards(event, {})).length, 0);
+});

@@ -45,3 +45,16 @@ test("port forwarding form supports multi-mapping rows with unique local ports",
   // Rule cards receive per-mapping runtime states.
   assert.match(source, /getRuleMappingStates\(rule\.id\)/);
 });
+
+test("edit save and wizard validate and preserve mapping rows", () => {
+  // Edit save applies the create-form row validation and disables Save until
+  // it passes, so blank/duplicated ports cannot persist undefined mappings.
+  assert.match(source, /isEditFormValid/);
+  assert.match(source, /areMappingRowsValid\(editDraft\.type, rows\)/);
+  assert.match(source, /saveDisabled=\{!isEditFormValid\(\)\}/);
+  // The wizard keeps rows carried over from the form: its save converts them
+  // into persisted mappings (row 0 folded from the wizard's scalar ports).
+  assert.match(source, /getWizardMappingRows/);
+  const saveRuleBody = source.slice(source.indexOf("const saveRule"));
+  assert.match(saveRuleBody, /mappings: rows\.map\(\(row\)/);
+});
